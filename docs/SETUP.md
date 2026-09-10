@@ -29,7 +29,12 @@ Add Extension**.
 
 **Restart Aseprite.** Extensions are only loaded at startup.
 
-Check it loaded: **File > Scripts > MCP Bridge: Status**.
+Check it loaded: **File > MCP Bridge...**, which opens the connect dialog
+described in [The connect dialog](#the-connect-dialog).
+
+> Upgrading from an earlier build: this one command replaces the old
+> `MCP Bridge: Start/Stop` and `MCP Bridge: Status` entries. Their command ids
+> are gone, so any keyboard shortcut bound to them needs rebinding.
 
 ## 3. Grant file-system access (one time, and it matters)
 
@@ -75,6 +80,57 @@ claude mcp add aseprite -- uv run --directory /path/to/AsepriteMCP aseprite-mcp
 Order does not matter: the extension retries until the server appears, and
 reconnects on its own if the server restarts.
 
+## The connect dialog
+
+**File > MCP Bridge...** — an entry in the File menu beside the Scripts
+submenu, not inside it. It is non-modal, so Aseprite stays usable while it is
+open, and it refreshes about four times a second.
+
+```text
+┌─ Aseprite MCP Bridge ──────────────────────┐
+│  Status:   ● Connected                     │
+│  Server:   [127.0.0.1] : [32145]           │
+│            env: 32200 - overridden         │
+│  Files:    ● Trusted                       │
+│  Token:    off                             │
+│  Handled:  214 commands (0 failed)         │
+│                                            │
+│  [x] Connect automatically                 │
+│                                            │
+│  [ Disconnect ]  [ Reconnect ]             │
+└────────────────────────────────────────────┘
+```
+
+- **Status** is `Connected`, `Connecting...` while it is dialling, or
+  `Disconnected` when you have switched it off. If it has been dialling for more
+  than a few seconds it also says so in words — most often *"No server at
+  127.0.0.1:32145 — is the MCP server running?"*, which is the one failure that
+  otherwise produces no error anywhere.
+- **Server** is editable. Type a host or port and press **Reconnect**; the value
+  is remembered across restarts. It has to match what the server is bound to, so
+  change `ASEPRITE_MCP_PORT` on the server side too.
+- **Files** mirrors the Security grant from section 3. If it reads
+  `Not trusted`, previews and saving will fail until you fix it and restart.
+- **Token** is read-only; see [About the token](#about-the-token).
+- **Connect automatically** governs the *next* launch only. The buttons govern
+  now, which is the difference from the old Start/Stop menu entry.
+
+### Which host and port win
+
+```text
+what you typed in the dialog  >  ASEPRITE_MCP_HOST / _PORT  >  the built-in default
+```
+
+A value typed into the dialog is the more deliberate act, and an environment
+variable is invisible to someone launching Aseprite from Steam. Because that
+means a stored value can quietly shadow a variable you set, the dialog says when
+it is doing so — `env: 32200 - overridden` under the Server row.
+
+Nothing is stored unless it differs from what the environment and the default
+would have produced on their own, so pressing Reconnect without changing anything
+does not silently pin the current values. To go back to following the
+environment, retype the value the variable holds and press Reconnect.
+
 ## Configuration
 
 All optional. The defaults work.
@@ -82,8 +138,8 @@ All optional. The defaults work.
 | Variable | Default | Meaning |
 |---|---|---|
 | `ASEPRITE_MCP_ALLOWED_DIRS` | `<repo>/sprites` | Directories `open_sprite` and `save_sprite` may touch, `;`-separated. Everything else is refused. |
-| `ASEPRITE_MCP_PORT` | `32145` | Bridge port. Set it for **both** the server and Aseprite if you change it. |
-| `ASEPRITE_MCP_HOST` | `127.0.0.1` | Loopback only unless `ASEPRITE_MCP_ALLOW_NON_LOOPBACK=1`. |
+| `ASEPRITE_MCP_PORT` | `32145` | Bridge port. Set it for **both** the server and Aseprite if you change it. On the Aseprite side a port typed into the connect dialog outranks this. |
+| `ASEPRITE_MCP_HOST` | `127.0.0.1` | Loopback only unless `ASEPRITE_MCP_ALLOW_NON_LOOPBACK=1`. Outranked by the connect dialog, same as the port. |
 | `ASEPRITE_MCP_TOKEN` | unset | Opt-in shared secret; set the same value in both environments. |
 | `ASEPRITE_MCP_TIMEOUT` | `5` | Seconds to wait for a normal command. |
 | `ASEPRITE_MCP_RENDER_TIMEOUT` | `30` | Seconds to wait for a render. |
@@ -131,9 +187,14 @@ answer looks like:
 ## Troubleshooting
 
 **`ASEPRITE_NOT_CONNECTED`**
-Aseprite is not running, the extension is not installed, or it was stopped from
-**File > Scripts > MCP Bridge: Start/Stop**. Check **MCP Bridge: Status**; it
-reports the port it is dialling and the last error.
+Aseprite is not running, the extension is not installed, or the bridge was
+switched off. Open **File > MCP Bridge...**: it reports the address it
+is dialling, whether anything is listening there, and the last error.
+
+**The dialog flickers between Connected and Connecting**
+Two copies of Aseprite are running. Only one may be attached, and the server
+closes the older connection whenever a newer one arrives — so two instances take
+turns forever. Close one.
 
 **`TIMEOUT` on the first preview or open**
 Almost always the Security dialog waiting for a click. Switch to Aseprite and

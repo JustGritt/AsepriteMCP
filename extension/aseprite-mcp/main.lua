@@ -14,6 +14,16 @@ local queue = dofile(app.fs.joinPath(SCRIPT_DIR, "queue.lua"))({
   trace = trace,
 })
 local ws = dofile(app.fs.joinPath(SCRIPT_DIR, "ws.lua"))({ queue = queue, trace = trace })
+local dialog = dofile(app.fs.joinPath(SCRIPT_DIR, "dialog.lua"))({
+  ws = ws,
+  queue = queue,
+  fsio = core.fsio,
+  trace = trace,
+})
+
+-- Nothing above may dial, resolve a target or construct a Dialog: this runs at
+-- module load, before init(plugin) exists, so plugin.preferences -- which
+-- outrank the environment -- have not been pushed in yet.
 
 -- Settle file access now, at load, rather than from inside the pump. A Security
 -- modal raised from a Timer callback never paints and hangs the bridge.
@@ -25,76 +35,77 @@ trace.writef("extension loaded (apiVersion=%s, commands=%d, canWriteFiles=%s)",
   tostring(canWriteFiles))
 
 queue.setSender(ws.send)
--- Discovery polling rides on the pump tick, so there is exactly one timer.
-queue.setIdleHook(ws.poll)
 
--- Deliberately silent on the happy path: Aseprite opens its Console window the
--- first time a script prints, and doing that on every editor launch would be
--- obnoxious. Errors still print, and "MCP Bridge: Status" reports the details.
-local function start()
-  if not queue.isRunning() then
+--- The pump owns the only Timer in the extension, and that Timer drives both the
+--- socket poll and the dialog's refresh. So it runs while the bridge is dialling
+--- *or* while the dialog is open, and nothing else may start or stop it.
+---
+--- Disconnect deliberately flips ws.setEnabled rather than calling queue.stop():
+--- stopping the pump would also freeze the dialog and drop anything already
+--- queued without a reply, which the server then sees as a timeout rather than a
+--- clean disconnect.
+local function syncPump()
+  if ws.isEnabled() or dialog.isOpen() then
     queue.start()
+  else
+    queue.stop()
   end
 end
 
-local function stop()
-  ws.disconnect()
-  queue.stop()
-end
-
-local function statusText()
-  local status = ws.status()
-  local stats = queue.stats()
-  local lines = {
-    "Running: " .. tostring(queue.isRunning()),
-    "Connected: " .. tostring(status.connected),
-    "Can write files: " .. tostring(core.fsio.canWrite()),
-    "Server: ws://" .. status.host .. ":" .. status.port,
-    "Token auth: " .. tostring(status.usingToken),
-    "Commands handled: " .. stats.handled .. " (failed: " .. stats.failed .. ")",
-  }
-  if status.lastError then
-    lines[#lines + 1] = "Last error: " .. status.lastError
-  end
-  return table.concat(lines, "\n")
-end
+-- One timer, one hook. Each branch is isolated so a reconnect hiccup cannot
+-- freeze the dialog at a stale reading and a dialog bug cannot make the bridge
+-- go deaf -- but both must trace, or this is quieter than the plain
+-- setIdleHook(ws.poll) it replaces, where queue.lua reported the failure.
+queue.setIdleHook(function()
+  local polled, pollErr = pcall(ws.poll)
+  if not polled then trace.writef("ws.poll error: %s", tostring(pollErr)) end
+  local ticked, tickErr = pcall(dialog.tick)
+  if not ticked then trace.writef("dialog tick error: %s", tostring(tickErr)) end
+end)
 
 function init(plugin)
   trace.write("init(plugin) called")
+
   if plugin.preferences.autoConnect == nil then
+    -- Right for a boolean with no environment equivalent, and deliberately NOT
+    -- done for host and port. Seeding those would write the built-in defaults
+    -- into preferences on first launch, and preferences outrank
+    -- ASEPRITE_MCP_HOST/_PORT -- so the variables would be shadowed forever, on
+    -- a machine where they used to work. See docs/HANDOFF.md.
     plugin.preferences.autoConnect = true
   end
 
-  plugin:newCommand{
-    id = "AsepriteMcpToggle",
-    title = "MCP Bridge: Start/Stop",
-    group = "file_scripts",
-    onclick = function()
-      if queue.isRunning() then
-        stop()
-        plugin.preferences.autoConnect = false
-      else
-        start()
-        plugin.preferences.autoConnect = true
-      end
-    end,
-    onchecked = function() return queue.isRunning() end,
+  -- Pushed in before anything dials.
+  local ok, err = ws.setTarget{
+    host = plugin.preferences.host,
+    port = plugin.preferences.port,
   }
-
-  plugin:newCommand{
-    id = "AsepriteMcpStatus",
-    title = "MCP Bridge: Status",
-    group = "file_scripts",
-    onclick = function()
-      app.alert{ title = "Aseprite MCP Bridge", text = statusText() }
-    end,
-  }
-
-  if plugin.preferences.autoConnect then
-    start()
+  if not ok then
+    -- __pref.lua is a plain Lua file that both Aseprite and humans write, so a
+    -- bad value can land here. Falling back to the environment and the default
+    -- beats refusing to connect, and the dialog will rewrite it on the next
+    -- Reconnect. Not printed: this is benign and self-healing, and print pops
+    -- Aseprite's Console window on every launch.
+    trace.writef("ignoring stored bridge target: %s", tostring(err))
   end
+
+  dialog.setPreferences(plugin.preferences)
+  dialog.setPumpHook(syncPump)
+
+  ws.setEnabled(plugin.preferences.autoConnect and true or false)
+
+  plugin:newCommand{
+    id = "AsepriteMcpDialog",
+    title = "MCP Bridge...",
+    group = "file_scripts",
+    onclick = function() dialog.open() end,
+  }
+
+  syncPump()
 end
 
 function exit(plugin)
-  stop()
+  dialog.close()
+  ws.setEnabled(false)
+  queue.stop()
 end

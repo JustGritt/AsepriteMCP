@@ -645,6 +645,233 @@ test("ids survive the json round trip as integers", function()
   sprite:close()
 end)
 
+print("=== connection ===")
+-- The precedence chain and the status readout, tested without a socket or a
+-- Dialog. Both modules keep a pure core for exactly this: Dialog{} returns nil
+-- under -b, and Lua cannot *write* environment variables, so a resolver that
+-- read os.getenv itself could only ever be exercised on one axis.
+local noTrace = {
+  write = function() end,
+  writef = function() end,
+  isEnabled = function() return false end,
+}
+local ws = dofile(app.fs.joinPath(EXT_DIR, "ws.lua"))({ queue = queue, trace = noTrace })
+local dialog = dofile(app.fs.joinPath(EXT_DIR, "dialog.lua"))({ trace = noTrace })
+
+test("resolve: the built-in default when nothing else is set", function()
+  local t = ws.resolve(nil, nil, nil, nil)
+  equals(t.host, "127.0.0.1", "default host")
+  equals(t.port, 32145, "default port")
+  equals(t.hostSource, "default", "host source")
+  equals(t.portSource, "default", "port source")
+end)
+
+test("resolve: the environment beats the default", function()
+  local t = ws.resolve(nil, nil, "10.0.0.4", "32200")
+  equals(t.host, "10.0.0.4", "env host wins")
+  equals(t.port, 32200, "env port wins")
+  equals(t.hostSource, "environment", "host source")
+  equals(t.portSource, "environment", "port source")
+end)
+
+test("resolve: a preference beats the environment", function()
+  local t = ws.resolve("192.168.1.5", 40000, "10.0.0.4", "32200")
+  equals(t.host, "192.168.1.5", "override host wins")
+  equals(t.port, 40000, "override port wins")
+  equals(t.hostSource, "preference", "host source")
+  equals(t.portSource, "preference", "port source")
+  equals(t.envHost, "10.0.0.4", "the shadowed env host is still reported")
+  equals(t.envPort, "32200", "and the shadowed env port")
+end)
+
+test("resolve: host and port fall through independently", function()
+  local t = ws.resolve(nil, 40000, "10.0.0.4", nil)
+  equals(t.host, "10.0.0.4", "host came from the environment")
+  equals(t.hostSource, "environment", "host source")
+  equals(t.port, 40000, "port came from the preference")
+  equals(t.portSource, "preference", "port source")
+end)
+
+test("resolve: an unset preference falls back to the environment, not the default", function()
+  -- The whole reason host and port are never seeded at first run. If "unset"
+  -- and "set to the default value" were the same state, writing the defaults in
+  -- once would shadow ASEPRITE_MCP_PORT forever, on a machine where it used to
+  -- work. See docs/HANDOFF.md.
+  local t = ws.resolve(nil, nil, "10.0.0.4", "32200")
+  check(t.port ~= 32145, "the default did not win over a set variable")
+  equals(t.portSource, "environment", "port source")
+end)
+
+test("resolve: an unusable env port is not reported as a plain default", function()
+  local t = ws.resolve(nil, nil, nil, "abc")
+  equals(t.port, 32145, "the default value is used")
+  equals(t.portSource, "environment-invalid", "but the variable is known to be set")
+  equals(t.envPort, "abc", "and what it held")
+end)
+
+test("setTarget: an empty value clears a slot rather than setting it", function()
+  check(ws.setTarget{ host = "1.2.3.4", port = 40000 }, "a good target is accepted")
+  equals(ws.status().hostSource, "preference", "the override is in force")
+  equals(ws.status().port, 40000, "and applied")
+  check(ws.setTarget{ host = "", port = nil }, "empty and nil clear")
+  -- Not "default": this machine may have ASEPRITE_MCP_HOST set, and falling
+  -- through to it is the point.
+  check(ws.status().hostSource ~= "preference", "host fell back out of preference")
+  check(ws.status().portSource ~= "preference", "port fell back out of preference")
+end)
+
+test("setTarget: refuses a fractional port rather than truncating it", function()
+  local ok, err = ws.setTarget{ port = 32145.5 }
+  check(not ok, "a fractional port is refused")
+  check(err ~= nil and err:find("whole") ~= nil, "and says why: " .. tostring(err))
+  -- Guards the reason this check exists. Stock Lua 5.4 raises for %d on a float
+  -- with a fraction; Aseprite's build truncates instead, so without an explicit
+  -- refusal a hand-edited __pref.lua would dial a port nobody wrote and nothing
+  -- would connect the symptom back to the file. If a future Aseprite starts
+  -- raising, this line fails and the comments above need revisiting.
+  equals(string.format("%d", 32145.5), "32145", "this Lua truncates rather than raising")
+end)
+
+test("setTarget: refuses out-of-range ports, and reads 0 as empty", function()
+  check(not ws.setTarget{ port = 70000 }, "70000 is refused")
+  check(not ws.setTarget{ port = -1 }, "-1 is refused")
+  local ok, err = ws.setTarget{ port = 0 }
+  check(not ok, "0 is refused")
+  -- Aseprite's number widget hands back 0 for an empty field *and* for
+  -- unparseable text, so 0 is what the dialog actually has to defend against
+  -- and it deserves the message that fits what the user sees.
+  check(err ~= nil and err:find("empty") ~= nil, "0 reads as empty: " .. tostring(err))
+end)
+
+test("setTarget: a refused value leaves the previous one in place", function()
+  check(ws.setTarget{ port = 40000 }, "set a good port")
+  check(not ws.setTarget{ port = 99999 }, "then a bad one")
+  equals(ws.status().port, 40000, "the good one survives")
+  ws.setTarget{}
+end)
+
+--- Build a plausible ws.status() return. `false` means "not given": the active
+--- target mirrors the resolved one unless a test says otherwise.
+local function statusTable(overrides)
+  local base = {
+    enabled = true,
+    connected = true,
+    host = "127.0.0.1",
+    port = 32145,
+    hostSource = "default",
+    portSource = "default",
+    envHost = nil,
+    envPort = nil,
+    activeHost = false,
+    activePort = false,
+    usingToken = false,
+    lastError = nil,
+    lastAttempt = 100,
+  }
+  for key, value in pairs(overrides or {}) do base[key] = value end
+  if base.activeHost == false then base.activeHost = base.host end
+  if base.activePort == false then base.activePort = base.port end
+  return base
+end
+
+local function vm(overrides, stats, canWrite, now)
+  return dialog.viewModel(
+    statusTable(overrides),
+    stats or { handled = 0, failed = 0 },
+    canWrite == nil and true or canWrite,
+    now or 100)
+end
+
+test("view model: three connection states, not two", function()
+  equals(vm({ enabled = true, connected = true }).statusText, "Connected", "connected")
+  check(vm({ enabled = true, connected = true }).statusOk, "connected reads ok")
+  equals(vm({ enabled = true, connected = false }).statusText, "Connecting...", "dialling")
+  check(not vm({ enabled = true, connected = false }).statusOk, "dialling does not")
+  equals(vm({ enabled = false, connected = false }).statusText, "Disconnected", "switched off")
+end)
+
+test("view model: the toggle caption follows enabled, not connected", function()
+  equals(vm({ enabled = true, connected = false }).toggleText, "Disconnect", "enabled but dialling")
+  equals(vm({ enabled = false, connected = false }).toggleText, "Connect", "switched off")
+end)
+
+test("view model: a silently failed dial still gets an explanation", function()
+  -- The common failure -- no server listening -- leaves lastError nil, because
+  -- WebSocket{} construction succeeds and the dial fails asynchronously, where
+  -- onreceive only ever sees OPEN/TEXT/CLOSE. Without this the dialog would
+  -- report "Connecting..." forever and say nothing about why.
+  equals(vm({ connected = false, lastAttempt = 100 }, nil, true, 102).statusHint, "",
+    "silent during the grace period")
+  local late = vm({ connected = false, lastAttempt = 100 }, nil, true, 110)
+  check(late.statusHint:find("No server at 127.0.0.1:32145") ~= nil,
+    "then names the address: " .. late.statusHint)
+  equals(vm({ connected = true, lastAttempt = 100 }, nil, true, 110).statusHint, "",
+    "and never while connected")
+  equals(vm({ enabled = false, connected = false, lastAttempt = 100 }, nil, true, 110).statusHint,
+    "", "nor when nothing is trying")
+end)
+
+test("view model: file trust carries its remedy only when it is missing", function()
+  local trusted = vm({}, nil, true)
+  equals(trusted.filesText, "Trusted", "trusted")
+  equals(trusted.filesHint, "", "and says nothing more")
+  local denied = vm({}, nil, false)
+  equals(denied.filesText, "Not trusted", "not trusted")
+  check(not denied.filesOk, "and is not ok")
+  check(denied.filesHint:find("SETUP") ~= nil,
+    "and points somewhere: " .. denied.filesHint)
+end)
+
+test("view model: a preference shadowing the environment is annotated", function()
+  equals(vm({}).serverNote, "", "nothing to say when no variable is set")
+  equals(vm({ portSource = "environment", envPort = "32145" }).serverNote, "",
+    "nor when the variable itself won")
+  equals(vm({ portSource = "preference", port = 40000, envPort = "32200" }).serverNote,
+    "env: 32200 - overridden", "names the value being shadowed")
+  equals(vm({ portSource = "preference", port = 32200, envPort = "32200" }).serverNote,
+    "", "but not when the two agree")
+  equals(vm({ hostSource = "preference", host = "1.2.3.4", envHost = "10.0.0.4" }).serverNote,
+    "env: 10.0.0.4 - overridden", "the same for the host")
+  equals(vm({ portSource = "environment-invalid", envPort = "abc" }).serverNote,
+    "env: abc - not a number, ignored", "an unusable variable says so rather than vanishing")
+end)
+
+test("view model: a resolved target the socket is not on yet", function()
+  local note = vm({ connected = true, port = 40000, activePort = 32145 }).serverNote
+  check(note:find("press Reconnect") ~= nil, "asks for it to be applied: " .. note)
+end)
+
+test("view model: the handled counter", function()
+  equals(vm({}, { handled = 1, failed = 0 }).handledText, "1 command (0 failed)", "singular")
+  equals(vm({}, { handled = 214, failed = 3 }).handledText, "214 commands (3 failed)", "plural")
+end)
+
+test("view model: errors are truncated, and dropped once connected", function()
+  local long = string.rep("z", 200)
+  local shown = vm({ connected = false, lastError = long })
+  -- The window is pinned to the size it has at show{}, so anything longer would
+  -- be clipped at an arbitrary point. Better to choose where the cut lands.
+  check(#shown.errorText <= 58, "truncated to the pinned width, got " .. #shown.errorText)
+  equals(shown.errorText:sub(-3), "...", "and marked as truncated")
+  equals(vm({ connected = true, lastError = long }).errorText, "",
+    "a stale error beside a live connection would read as a current one")
+  equals(vm({ enabled = false, connected = false, lastError = long }).errorText, "",
+    "and beside a deliberate Disconnect it would read as a failure")
+end)
+
+test("view model: the token row stays visible even though the field is not", function()
+  equals(vm({ usingToken = false }).tokenText, "off", "off")
+  equals(vm({ usingToken = true }).tokenText, "on (environment)", "on")
+end)
+
+test("display text: the status markers are decided in exactly one place", function()
+  local texts = dialog.displayText(vm({ enabled = true, connected = true }))
+  check(texts.status:find("Connected") ~= nil, "carries the text")
+  check(texts.status ~= "Connected", "and a marker in front of it")
+  equals(texts.toggle, "Disconnect", "a button caption is left as a plain string")
+  equals(texts.handled, "0 commands (0 failed)", "and so is the counter")
+end)
+
 -- ----------------------------------------------------------------------- teardown
 
 for _, path in ipairs(tempFiles) do os.remove(path) end
