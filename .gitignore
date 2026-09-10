@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+uv.lock
+
+# Sandbox working files; fixtures are force-added.
+sprites/*
+!sprites/.gitkeep
+
+# Aseprite writes plugin.preferences here, and the dev install junctions
+# %APPDATA%\Aseprite\extensions\aseprite-mcp straight at this directory, so the
+# editor's runtime state lands in the working tree.
+extension/aseprite-mcp/__pref.lua
