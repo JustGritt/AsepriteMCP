@@ -11,7 +11,7 @@ Phases 1–5 of [ASEPRITE_MCP.md](ASEPRITE_MCP.md) are built, committed and veri
 to end. **33 MCP tools** drive a live Aseprite session over a loopback WebSocket.
 
 | | |
-|---|---|
+| --- | --- |
 | Commit | `593bf03` (on `main`, **not pushed** — pushes are the user's) |
 | Python tests | 205 passing |
 | Lua assertions | 144 passing, against the real engine |
@@ -46,7 +46,7 @@ with a wall of text. Host and port can *only* be changed with environment variab
 which is close to useless for an Aseprite launched from Steam. Replace both with one
 non-modal dialog:
 
-```
+```text
 ┌─ Aseprite MCP Bridge ──────────────┐
 │                                    │
 │  Status:  ● Connected              │
@@ -67,7 +67,9 @@ non-modal dialog:
   pump already ticks at 1/60 and already has an idle hook (`queue.setIdleHook`), so drive
   the refresh from there — do **not** add a second `Timer`. Throttle to ~4 Hz; repainting
   sixty times a second to move a command counter is waste.
-- **Editable host and port.** Applied on `Reconnect`, persisted in `plugin.preferences`.
+- **Editable host and port.** Applied on `Reconnect`, persisted in `plugin.preferences`,
+  which outrank the env vars — so the field must say when it is shadowing one. See
+  [Decisions](#settled-preferences-win-over-the-environment).
 - **`Connect automatically`** replaces today's implicit coupling between the Start/Stop
   toggle and `preferences.autoConnect`.
 - **Files: Trusted / Not trusted** surfaces `fsio.canWrite()`. This is the single most
@@ -80,10 +82,10 @@ non-modal dialog:
 ### Files
 
 | File | Change |
-|---|---|
+| --- | --- |
 | `extension/aseprite-mcp/dialog.lua` | **New.** Widget construction and refresh. |
 | `extension/aseprite-mcp/main.lua` | Replace the two `plugin:newCommand` blocks with one `MCP Bridge...` command; keep `exit()` closing the dialog. |
-| `extension/aseprite-mcp/ws.lua` | Add `M.setTarget{host, port}`. `readTarget()` currently re-reads env on every `openSocket()` and would clobber a dialog edit. |
+| `extension/aseprite-mcp/ws.lua` | Add `M.setTarget{host, port}` and the precedence chain. `readTarget()` currently re-reads env on every `openSocket()` and would clobber a dialog edit. |
 | `tests/lua/run_tests.lua` | Cover the view model only — see below. |
 | `docs/SETUP.md` | Rewrite the connection section around the dialog. |
 
@@ -135,14 +137,59 @@ saying so only after you close the dialog, which is itself the answer.
 
 ---
 
-## Decisions left open
+## Decisions
 
-- **Precedence between the dialog and the env vars.** My recommendation:
-  `plugin.preferences` > `ASEPRITE_MCP_HOST`/`_PORT` > default, because a value typed into
-  a dialog is the more deliberate act and an env var is invisible to a GUI user. The
-  counter-argument is that it makes a scripted override silently ineffective, so whichever
-  way it goes, say so in the dialog — for example, show the env value greyed out when it
-  is being overridden.
+### Settled: preferences win over the environment
+
+```text
+plugin.preferences  >  ASEPRITE_MCP_HOST / _PORT  >  built-in default
+```
+
+A value typed into the dialog is the more deliberate act, and an env var is invisible to
+someone running Aseprite from Steam. The cost is that a scripted `ASEPRITE_MCP_PORT` can
+be silently ineffective, so the dialog has to *show* when it is shadowing one — annotate
+the field (`env: 32200 — overridden`) rather than letting the user wonder why their
+variable did nothing.
+
+**The trap in implementing this:** an unset preference must fall through to the env var,
+so "unset" and "set to the default value" cannot be the same state. Do **not** seed the
+preference at first run. `main.lua` currently does exactly that for `autoConnect`:
+
+```lua
+if plugin.preferences.autoConnect == nil then
+  plugin.preferences.autoConnect = true
+end
+```
+
+That pattern is right for a boolean with no env equivalent and **wrong** for host and
+port. Copying it would write `127.0.0.1` / `32145` into preferences on first launch, which
+then outranks the env var forever — and the symptom is `ASEPRITE_MCP_PORT` being ignored
+on a machine where it used to work. Leave host and port `nil` until the user edits them,
+and treat `nil` as "not set" in the precedence chain.
+
+Concretely, `ws.lua` keeps an override slot that starts empty:
+
+```lua
+-- Precedence: explicit override (from plugin.preferences, set via the dialog),
+-- then the environment, then the built-in default. An empty override is not the
+-- same as one holding the default value -- see docs/HANDOFF.md.
+local override = { host = nil, port = nil }
+
+local function readTarget()
+  return {
+    host = override.host or env("ASEPRITE_MCP_HOST", DEFAULT_HOST),
+    port = override.port or tonumber(env("ASEPRITE_MCP_PORT", "")) or DEFAULT_PORT,
+    token = env("ASEPRITE_MCP_TOKEN", ""),
+  }
+end
+```
+
+`main.lua` pushes the stored preferences in via `ws.setTarget{...}` at `init`, and the
+dialog calls the same setter on `Reconnect`. `ws.status()` should also report which source
+won, so the dialog can render the annotation without duplicating the precedence logic.
+
+### Still open
+
 - **Whether the dialog should offer a token field.** Token auth is off by default and the
   token has to match the server's. A field invites a mismatch that presents as an
   unexplained failed handshake, so leaving it env-only is defensible.
