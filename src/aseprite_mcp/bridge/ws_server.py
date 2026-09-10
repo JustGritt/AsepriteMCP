@@ -36,6 +36,9 @@ MAX_FRAME_BYTES = 8 * 1024 * 1024
 # How long a freshly connected client has to identify itself before we drop it.
 HELLO_TIMEOUT = 10.0
 
+# How often a process that lost the race for the port checks whether it is free.
+PORT_RETRY_SECONDS = 2.0
+
 
 class AsepriteBridge:
     """Owns the WebSocket server and the request/response correlation table."""
@@ -49,22 +52,75 @@ class AsepriteBridge:
         self._token = config.token or new_token()
         self._session: SessionFile | None = None
         self.client_info: dict[str, Any] = {}
+        self._bind_error: str | None = None
+        self._acquire_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------ lifecycle
 
-    async def start(self) -> None:
-        self._server = await serve(
-            self._handle_client,
-            self._config.host,
-            self._config.port,
-            max_size=MAX_FRAME_BYTES,
-        )
+    async def _bind(self) -> bool:
+        """Try to take the port. Returns whether we now own it."""
+        try:
+            self._server = await serve(
+                self._handle_client,
+                self._config.host,
+                self._config.port,
+                max_size=MAX_FRAME_BYTES,
+            )
+        except OSError as exc:
+            self._server = None
+            self._bind_error = (
+                f"Another process is already listening on "
+                f"{self._config.host}:{self._config.port} ({exc.strerror or exc})."
+            )
+            return False
+
+        self._bind_error = None
         port = self.bound_port
         self._session = SessionFile(self._config.host, port, self._token)
         self._session.write()
         log.info("Aseprite bridge listening on ws://%s:%s", self._config.host, port)
+        return True
+
+    async def _keep_trying_to_bind(self) -> None:
+        """Take the port the moment whoever holds it lets go."""
+        while True:
+            await asyncio.sleep(PORT_RETRY_SECONDS)
+            if await self._bind():
+                return
+
+    async def start(self) -> None:
+        """Start listening, or carry on without the port if it is taken.
+
+        Binding used to be fatal, which made the whole server unusable under any
+        MCP client that spawns more than one instance: the second process died
+        with Errno 10048 before it could answer tools/list, and the client showed
+        a server that had connected but had no tools. Codex CLI spawns two.
+
+        Only one process can own the port -- Aseprite's Lua WebSocket is a client
+        and has to dial a fixed address -- so the loser cannot serve the bridge.
+        But it can still serve the tool list and say clearly why calls fail, and
+        it takes over the moment the holder exits.
+        """
+        if await self._bind():
+            return
+
+        log.warning("%s Serving tools without a bridge; will take over if it exits.",
+                    self._bind_error)
+        self._acquire_task = asyncio.create_task(self._keep_trying_to_bind())
+
+    @property
+    def bind_error(self) -> str | None:
+        """Why this process does not own the bridge port, if it does not."""
+        return self._bind_error
 
     async def stop(self) -> None:
+        if self._acquire_task is not None:
+            self._acquire_task.cancel()
+            try:
+                await self._acquire_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            self._acquire_task = None
         if self._session:
             self._session.remove()
             self._session = None
@@ -235,6 +291,16 @@ class AsepriteBridge:
         """
         client = self._client
         if client is None:
+            if self._bind_error:
+                # Sending the user to check their extension would waste their time:
+                # it is almost certainly connected, just to a different copy of
+                # this server. See start().
+                raise BridgeError(
+                    ErrorCode.ASEPRITE_NOT_CONNECTED,
+                    f"{self._bind_error} Aseprite is attached to that process rather "
+                    "than this one, so commands cannot reach it from here. Call "
+                    "get_connection_status for how to fix it.",
+                )
             raise BridgeError(
                 ErrorCode.ASEPRITE_NOT_CONNECTED,
                 "No Aseprite extension is currently connected. Start Aseprite with the "

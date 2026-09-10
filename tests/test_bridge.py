@@ -226,3 +226,87 @@ class TestFailureModes:
         assert not ctx.bridge.connected
         await fake.stop()
         ctx.cleanup()
+
+
+class TestContestedPort:
+    """Two server processes, one port.
+
+    Binding used to be fatal, so the second copy died with Errno 10048 before it
+    could answer tools/list. Any MCP client that spawns more than one instance --
+    Codex CLI spawns two -- therefore showed a server that had connected and had
+    no tools at all, with the real cause visible only in a stderr traceback the
+    client discarded.
+    """
+
+    async def _bridge_on(self, port: int, sandbox: Path):
+        from aseprite_mcp.bridge.ws_server import AsepriteBridge
+        from aseprite_mcp.config import Config
+
+        return AsepriteBridge(Config(
+            host="127.0.0.1", port=port, allowed_dirs=(sandbox,),
+            default_timeout=2.0, render_timeout=2.0,
+        ))
+
+    async def test_losing_the_port_is_not_fatal(self, config, sandbox, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+        first = await self._bridge_on(0, sandbox)
+        await first.start()
+        port = first.bound_port
+        assert first.bind_error is None, "the first bridge should own the port"
+
+        second = await self._bridge_on(port, sandbox)
+        try:
+            await second.start()          # must not raise
+            assert second.bind_error is not None, "the loser should say why it has no bridge"
+            assert str(port) in second.bind_error
+            assert not second.connected
+        finally:
+            await second.stop()
+            await first.stop()
+
+    async def test_the_loser_takes_over_when_the_holder_exits(
+        self, config, sandbox, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+        first = await self._bridge_on(0, sandbox)
+        await first.start()
+        port = first.bound_port
+
+        second = await self._bridge_on(port, sandbox)
+        await second.start()
+        assert second.bind_error is not None
+
+        await first.stop()
+        try:
+            assert await wait_for(lambda: second.bind_error is None, timeout=10.0), (
+                "the second bridge should acquire the port once the first releases it"
+            )
+            fake = FakeAseprite()
+            await fake.start(second.bound_port, second.token)
+            try:
+                assert await wait_for(lambda: second.connected), (
+                    "and then actually serve Aseprite"
+                )
+            finally:
+                await fake.stop()
+        finally:
+            await second.stop()
+
+    async def test_calls_explain_that_another_process_holds_the_bridge(
+        self, config, sandbox, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+        first = await self._bridge_on(0, sandbox)
+        await first.start()
+        second = await self._bridge_on(first.bound_port, sandbox)
+        await second.start()
+        try:
+            with pytest.raises(BridgeError) as caught:
+                await second.call("sprite.info")
+            assert caught.value.code is ErrorCode.ASEPRITE_NOT_CONNECTED
+            # Not the generic "start Aseprite" advice: the extension is fine, it
+            # is simply attached to the other process.
+            assert "already listening" in str(caught.value)
+        finally:
+            await second.stop()
+            await first.stop()
