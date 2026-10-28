@@ -34,6 +34,7 @@ return function()
     "commands/layers.lua",
     "commands/frames.lua",
     "commands/drawing.lua",
+    "commands/cels.lua",
     "commands/inspection.lua",
     "commands/animation.lua",
     "commands/history.lua",
@@ -46,6 +47,10 @@ return function()
       end
       dispatch[name] = handler
     end
+  end
+  -- Registered last, because a batch dispatches to every other command.
+  for name, handler in pairs(loadModule("commands/batch.lua")(deps, dispatch)) do
+    dispatch[name] = handler
   end
 
   return {

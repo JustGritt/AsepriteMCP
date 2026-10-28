@@ -8,22 +8,11 @@
 -- response text states it so the agent never mistakes it for artwork.
 
 local SYMBOLS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-local DEFAULT_MAX_PREVIEW_PIXELS = 4000000
 
 return function(deps)
   local proto, doc, color, render = deps.proto, deps.doc, deps.color, deps.render
   local fsio = deps.fsio
   local M = {}
-
-  --- Clamp scale so a big sprite cannot produce an enormous PNG.
-  local function fitScale(width, height, scale, maxPixels)
-    maxPixels = maxPixels or DEFAULT_MAX_PREVIEW_PIXELS
-    local reduced = scale
-    while reduced > 1 and (width * reduced) * (height * reduced) > maxPixels do
-      reduced = reduced - 1
-    end
-    return reduced, reduced ~= scale
-  end
 
   local function writePng(image, outPath)
     if type(outPath) ~= "string" or outPath == "" then
@@ -45,60 +34,72 @@ return function(deps)
     return { canWriteFiles = fsio.canWrite() }
   end
 
+  --- The part of the canvas a preview covers: params.region clamped to the
+  -- canvas, or the whole canvas.
+  local function previewArea(sprite, region)
+    if region == nil then return 0, 0, sprite.width, sprite.height, false end
+    local x0, y0 = math.max(0, math.floor(region.x)), math.max(0, math.floor(region.y))
+    local x1 = math.min(sprite.width, math.floor(region.x + region.width))
+    local y1 = math.min(sprite.height, math.floor(region.y + region.height))
+    if x1 <= x0 or y1 <= y0 then
+      proto.failf(
+        proto.ERROR.INVALID_PARAMS,
+        "Region %d,%d %dx%d lies outside the %dx%d canvas.",
+        region.x, region.y, region.width, region.height, sprite.width, sprite.height
+      )
+    end
+    return x0, y0, x1 - x0, y1 - y0, true
+  end
+
+  --- Crop, scale within the size budget, draw over a checkerboard and write.
+  -- Shared by render.canvas and render.layer so both zoom and cap the same way.
+  local function writePreview(sprite, source, params, result)
+    local x, y, w, h, cropped = previewArea(sprite, params.region)
+    if cropped then
+      source = render.crop(source, x, y, w, h)
+      result.region = proto.array({ x, y, w, h })
+    end
+    local requested = params.scale or 8
+    local scale, reduced = render.fitScale(
+      function(s) return w * s, h * s end, requested, params.maxEdge, params.maxPixels)
+
+    local out = Image(w * scale, h * scale, ColorMode.RGB)
+    render.checkerboard(out, math.max(4, math.floor(scale / 2) * 2))
+    out:drawImage(render.upscale(source, scale), Point(0, 0))
+    writePng(out, params.outPath)
+
+    result.width = sprite.width
+    result.height = sprite.height
+    result.scale = scale
+    result.requestedScale = requested
+    result.scaleReduced = reduced or nil
+    result.empty = render.isEmpty(source) or nil
+    result.background = "checkerboard"
+    return result
+  end
+
   M["render.canvas"] = function(params)
     local sprite = doc.activeSprite()
     local frameNumber = doc.resolveFrame(sprite, params.frame)
-    local scale, reduced = fitScale(sprite.width, sprite.height, params.scale or 8, params.maxPixels)
-
     local composite = render.compositeFrame(sprite, frameNumber)
-    local empty = render.isEmpty(composite)
-
-    local out = Image(sprite.width * scale, sprite.height * scale, ColorMode.RGB)
-    render.checkerboard(out, math.max(4, math.floor(scale / 2) * 2))
-    out:drawImage(render.upscale(composite, scale), Point(0, 0))
-    writePng(out, params.outPath)
-
-    return {
-      frame = frameNumber,
-      width = sprite.width,
-      height = sprite.height,
-      scale = scale,
-      requestedScale = params.scale or 8,
-      scaleReduced = reduced or nil,
-      empty = empty or nil,
-      background = "checkerboard",
-    }
+    return writePreview(sprite, composite, params, { frame = frameNumber })
   end
 
   M["render.layer"] = function(params)
     local sprite = doc.activeSprite()
     local layer = doc.requireImageLayer(doc.resolveLayer(sprite, params.layer))
     local frameNumber = doc.resolveFrame(sprite, params.frame)
-    local scale, reduced = fitScale(sprite.width, sprite.height, params.scale or 8, params.maxPixels)
 
     local function toRGBA(value)
       local hex = color.pixelToHex(sprite, value)
       return color.parseHex(hex)
     end
-    local image, empty = render.layerFrame(sprite, layer, frameNumber, toRGBA)
-
-    local out = Image(sprite.width * scale, sprite.height * scale, ColorMode.RGB)
-    render.checkerboard(out, math.max(4, math.floor(scale / 2) * 2))
-    out:drawImage(render.upscale(image, scale), Point(0, 0))
-    writePng(out, params.outPath)
-
-    return {
+    local image = render.layerFrame(sprite, layer, frameNumber, toRGBA)
+    return writePreview(sprite, image, params, {
       layer = layer.name,
-      uuid = doc.layerId(layer),
+      id = doc.shortId(sprite, layer),
       frame = frameNumber,
-      width = sprite.width,
-      height = sprite.height,
-      scale = scale,
-      requestedScale = params.scale or 8,
-      scaleReduced = reduced or nil,
-      empty = empty or nil,
-      background = "checkerboard",
-    }
+    })
   end
 
   --- Exact pixel values as a character map plus a legend.
@@ -141,7 +142,6 @@ return function(deps)
           local symbol
           if a == 0 then
             symbol = "."
-            legend["."] = "#00000000"
           else
             symbol = symbolFor[hex]
             if not symbol then
@@ -161,11 +161,11 @@ return function(deps)
       rows[#rows + 1] = table.concat(chars)
     end
 
+    -- How to read rows is stated once, in the get_region tool description,
+    -- rather than repeated in every reply.
     return {
-      x = x0, y = y0, width = w, height = h,
       frame = frameNumber,
       source = source,
-      colorMode = doc.colorModeName(sprite.colorMode),
       rows = proto.array(rows),
       legend = legend,
       distinctColors = nextSymbol,
@@ -173,25 +173,23 @@ return function(deps)
       note = nextSymbol > #SYMBOLS
         and "More distinct colors than legend symbols; extras are shown as ?."
         or nil,
-      reading = "Each row is one pixel row, left to right. '.' is fully transparent; "
-        .. "' ' is outside the canvas. Map other characters through legend.",
     }
   end
 
   M["inspect.palette"] = function()
     local sprite = doc.activeSprite()
     local palette = sprite.palettes[1]
+    -- Positional: colors[1] is palette index 0. Alpha is spelled out only
+    -- when it is not ff, which is rare.
     local entries = {}
     for i = 0, #palette - 1 do
       local c = palette:getColor(i)
-      entries[#entries + 1] = {
-        index = i,
-        color = color.toHex(c.red, c.green, c.blue, c.alpha),
-      }
+      entries[#entries + 1] = c.alpha == 255
+        and string.format("#%02x%02x%02x", c.red, c.green, c.blue)
+        or color.toHex(c.red, c.green, c.blue, c.alpha)
     end
     return {
       colorMode = doc.colorModeName(sprite.colorMode),
-      size = #palette,
       transparentIndex = sprite.colorMode == ColorMode.INDEXED and sprite.transparentColor or nil,
       colors = proto.array(entries),
     }

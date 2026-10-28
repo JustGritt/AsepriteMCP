@@ -12,10 +12,8 @@ for name, value in pairs(DIRECTION_TO_ANIDIR) do
   ANIDIR_TO_DIRECTION[value] = name
 end
 
-local DEFAULT_MAX_PREVIEW_PIXELS = 4000000
-
 return function(deps)
-  local proto, doc, render = deps.proto, deps.doc, deps.render
+  local proto, doc, render, color = deps.proto, deps.doc, deps.render, deps.color
   local fsio = deps.fsio
   local M = {}
 
@@ -71,6 +69,14 @@ return function(deps)
     return proto.array(names)
   end
 
+  --- Columns that bring a contact sheet closest to square.
+  -- One long strip is the worst shape to look at: past the model's maximum
+  -- image width it gets shrunk, which blurs every cell and saves no tokens.
+  local function squareColumns(count, width, height)
+    local columns = math.ceil(math.sqrt(count * height / width))
+    return math.max(1, math.min(count, columns))
+  end
+
   -- ------------------------------------------------------------------ inspection
 
   M["anim.info"] = function(params)
@@ -104,22 +110,133 @@ return function(deps)
     return info
   end
 
+  --- The frame's pixels, composited or from one layer, as an RGB image.
+  local function frameImage(sprite, layer, frameNumber)
+    if layer == nil then return render.compositeFrame(sprite, frameNumber) end
+    local function toRGBA(value) return color.parseHex(color.pixelToHex(sprite, value)) end
+    return (render.layerFrame(sprite, layer, frameNumber, toRGBA))
+  end
+
+  local function box(minX, minY, maxX, maxY)
+    if minX > maxX then return nil end
+    return proto.array({ minX, minY, maxX - minX + 1, maxY - minY + 1 })
+  end
+
+  --- Opaque bounding box of an image, or nil when it is empty.
+  local function opaqueBounds(image)
+    local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
+    for y = 0, image.height - 1 do
+      for x = 0, image.width - 1 do
+        if app.pixelColor.rgbaA(image:getPixel(x, y)) > 0 then
+          if x < minX then minX = x end
+          if y < minY then minY = y end
+          if x > maxX then maxX = x end
+          if y > maxY then maxY = y end
+        end
+      end
+    end
+    return box(minX, minY, maxX, maxY)
+  end
+
+  --- What changed between two frames, as numbers rather than an image.
+  -- Answers "did anything move that should not have?" for a few dozen tokens
+  -- where an onion skin costs hundreds.
+  M["anim.compare"] = function(params)
+    local sprite = doc.activeSprite()
+    local a, b = doc.resolveFrame(sprite, params.a), doc.resolveFrame(sprite, params.b)
+    local layer = params.layer ~= nil
+      and doc.requireImageLayer(doc.resolveLayer(sprite, params.layer)) or nil
+    local imageA, imageB = frameImage(sprite, layer, a), frameImage(sprite, layer, b)
+
+    local kinds = {}
+    local changed, appeared, vanished = 0, 0, 0
+    local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
+    for y = 0, sprite.height - 1 do
+      for x = 0, sprite.width - 1 do
+        local va, vb = imageA:getPixel(x, y), imageB:getPixel(x, y)
+        if va ~= vb then
+          local aa, ab = app.pixelColor.rgbaA(va), app.pixelColor.rgbaA(vb)
+          local kind = (aa == 0 and "+") or (ab == 0 and "-") or "*"
+          if kind == "+" then appeared = appeared + 1 elseif kind == "-" then vanished = vanished + 1 end
+          changed = changed + 1
+          kinds[y * sprite.width + x] = kind
+          if x < minX then minX = x end
+          if y < minY then minY = y end
+          if x > maxX then maxX = x end
+          if y > maxY then maxY = y end
+        end
+      end
+    end
+
+    local result = {
+      a = a, b = b,
+      layer = layer and layer.name or nil,
+      changedPixels = changed,
+      appeared = appeared,
+      vanished = vanished,
+      recolored = changed - appeared - vanished,
+      changed = box(minX, minY, maxX, maxY),
+      boundsA = opaqueBounds(imageA),
+      boundsB = opaqueBounds(imageB),
+    }
+
+    if params.diffMap and changed > 0 then
+      local w, h = maxX - minX + 1, maxY - minY + 1
+      if w * h > (params.maxMapPixels or 4096) then
+        result.note = string.format(
+          "The changed area is %dx%d, too large for a diff map; compare a smaller layer.", w, h)
+      else
+        local rows = {}
+        for y = minY, maxY do
+          local chars = {}
+          for x = minX, maxX do chars[#chars + 1] = kinds[y * sprite.width + x] or "." end
+          rows[#rows + 1] = table.concat(chars)
+        end
+        result.diff = proto.array(rows)
+      end
+    end
+    return result
+  end
+
+  --- Opaque bounding box of every frame, to spot positional drift in text.
+  M["anim.bounds"] = function(params)
+    local sprite = doc.activeSprite()
+    local frames = frameRange(sprite, params.tag)
+    local layer = params.layer ~= nil
+      and doc.requireImageLayer(doc.resolveLayer(sprite, params.layer)) or nil
+
+    local perFrame = {}
+    local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
+    for _, frameNumber in ipairs(frames) do
+      local bounds = opaqueBounds(frameImage(sprite, layer, frameNumber))
+      perFrame[#perFrame + 1] = { frame = frameNumber, bounds = bounds, empty = bounds == nil or nil }
+      if bounds then
+        minX = math.min(minX, bounds[1])
+        minY = math.min(minY, bounds[2])
+        maxX = math.max(maxX, bounds[1] + bounds[3] - 1)
+        maxY = math.max(maxY, bounds[2] + bounds[4] - 1)
+      end
+    end
+    return {
+      tag = params.tag,
+      layer = layer and layer.name or nil,
+      frames = proto.array(perFrame),
+      union = box(minX, minY, maxX, maxY),
+    }
+  end
+
   M["render.contactSheet"] = function(params)
     local sprite = doc.activeSprite()
     local frames = frameRange(sprite, params.tag)
     local requested = params.scale or 4
 
-    -- Fit the whole sheet, not just one cell, inside the pixel budget.
-    local columns = params.columns or #frames
+    -- Fit the whole sheet, not just one cell, inside the budget.
+    local columns = params.columns or squareColumns(#frames, sprite.width, sprite.height)
     if columns > #frames then columns = #frames end
     local rows = math.ceil(#frames / columns)
-    local maxPixels = params.maxPixels or DEFAULT_MAX_PREVIEW_PIXELS
-    local scale = requested
-    while scale > 1
-      and (columns * sprite.width * scale + columns + 1)
-        * (rows * sprite.height * scale + rows + 1) > maxPixels do
-      scale = scale - 1
-    end
+    local scale = render.fitScale(function(s)
+      return columns * sprite.width * s + columns + 1, rows * sprite.height * s + rows + 1
+    end, requested, params.maxEdge, params.maxPixels)
 
     local sheet, usedColumns, usedRows = render.contactSheet(sprite, frames, scale, columns)
     if type(params.outPath) ~= "string" or params.outPath == "" then
@@ -161,11 +278,9 @@ return function(deps)
     local sprite = doc.activeSprite()
     local frameNumber = doc.resolveFrame(sprite, params.frame)
     local requested = params.scale or 8
-    local maxPixels = params.maxPixels or DEFAULT_MAX_PREVIEW_PIXELS
-    local scale = requested
-    while scale > 1 and (sprite.width * scale) * (sprite.height * scale) > maxPixels do
-      scale = scale - 1
-    end
+    local scale = render.fitScale(function(s)
+      return sprite.width * s, sprite.height * s
+    end, requested, params.maxEdge, params.maxPixels)
 
     local image, hasPrevious, hasNext = render.onionSkin(sprite, frameNumber, scale)
     if type(params.outPath) ~= "string" or params.outPath == "" then
@@ -193,15 +308,6 @@ return function(deps)
   end
 
   -- ------------------------------------------------------------------------ tags
-
-  M["tag.list"] = function()
-    local sprite = doc.activeSprite()
-    local tags = {}
-    for _, tag in ipairs(sprite.tags) do
-      tags[#tags + 1] = describeTag(tag)
-    end
-    return { tags = proto.array(tags), count = #tags }
-  end
 
   M["tag.create"] = function(params)
     local sprite = doc.activeSprite()

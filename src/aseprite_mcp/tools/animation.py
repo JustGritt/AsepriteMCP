@@ -25,22 +25,52 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
         title="Get animation info",
         description=(
-            "Report the frame range, direction, repeat count and per-frame durations of "
-            "a tag, or of the whole sprite when no tag is given."
+            "Frame range, direction, repeat count and per-frame durations of a tag, or of "
+            "every frame."
         ),
     )
     async def get_animation_info(tag: str | None = None) -> str:
         params = {} if tag is None else {"tag": tag}
-        return as_json(await ctx.bridge.call("anim.info", params))
+        return as_json(await ctx.call("anim.info", params))
+
+    @mcp.tool(
+        title="Compare frames",
+        description=(
+            "What differs between frames a and b, as counts (appeared, vanished, "
+            "recolored), the changed box and each frame's opaque bounds. diff_map=true adds "
+            "a map of the changed box (+ appeared, - vanished, * recolored). Far cheaper "
+            "than an onion skin."
+        ),
+    )
+    async def compare_frames(
+        a: int, b: int, layer: str | None = None, diff_map: bool = False
+    ) -> str:
+        params: dict[str, Any] = {"a": a, "b": b, "diffMap": diff_map}
+        if layer is not None:
+            params["layer"] = layer
+        params["maxMapPixels"] = ctx.config.max_region_pixels
+        return as_json(await ctx.call("anim.compare", params, timeout=ctx.config.render_timeout))
+
+    @mcp.tool(
+        title="Get animation bounds",
+        description=(
+            "The opaque bounding box of each frame in a tag, or of every frame, plus their "
+            "union, so drift shows up as numbers."
+        ),
+    )
+    async def get_animation_bounds(tag: str | None = None, layer: str | None = None) -> str:
+        params: dict[str, Any] = {}
+        if tag is not None:
+            params["tag"] = tag
+        if layer is not None:
+            params["layer"] = layer
+        return as_json(await ctx.call("anim.bounds", params, timeout=ctx.config.render_timeout))
 
     @mcp.tool(
         title="Get animation contact sheet",
         description=(
-            "Render every frame side by side in one image, with frame numbers drawn in "
-            "each cell, and return the per-frame durations and tags as text. This is how "
-            "you judge an animation as a whole: check silhouette readability, volume "
-            "consistency, motion arcs, spacing and pixel jitter across frames. Call it "
-            "after changing several frames."
+            "Every frame in one labelled grid, with durations and tags as text. Use it once "
+            "per animation pass to judge silhouette, volume, arcs, spacing and jitter."
         ),
     )
     async def get_animation_contact_sheet(
@@ -51,7 +81,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         check_scale(scale)
         if columns is not None and columns < 1:
             raise BridgeError(ErrorCode.INVALID_PARAMS, f"columns must be >= 1, got {columns}.")
-        params: dict[str, Any] = {"scale": scale}
+        params: dict[str, Any] = {"scale": scale, "maxEdge": ctx.config.sheet_max_edge}
         if tag is not None:
             params["tag"] = tag
         if columns is not None:
@@ -77,16 +107,15 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
         title="Get onion skin preview",
         description=(
-            "Render the previous, current and next frame superimposed at distinct "
-            "opacities, so motion arcs, spacing, silhouette continuity and unintended "
-            "jitter become visible. Defaults to the active frame."
+            "The previous (red tint), current and next (blue tint) frames superimposed, for "
+            "a specific question about motion between them."
         ),
     )
     async def get_onion_skin_preview(
         frame: int | None = None, scale: int = 8
     ) -> list[Image | str]:
         check_scale(scale)
-        params: dict[str, Any] = {"scale": scale}
+        params: dict[str, Any] = {"scale": scale, "maxEdge": ctx.config.preview_max_edge}
         if frame is not None:
             params["frame"] = frame
         image, result = await render_to_image(ctx, "render.onionSkin", params)
@@ -99,17 +128,10 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     # ------------------------------------------------------------------------ tags
 
     @mcp.tool(
-        title="List animation tags",
-        description="List every tag with its name, frame range, direction and repeat count.",
-    )
-    async def list_animation_tags() -> str:
-        return as_json(await ctx.bridge.call("tag.list"))
-
-    @mcp.tool(
         title="Create animation tag",
         description=(
-            "Tag a contiguous range of frames as a named animation, such as idle, walk, "
-            "attack, hit or death. Frame numbers are 1-based and inclusive."
+            "Tag frames from_frame to to_frame (1-based, inclusive) as a named animation. "
+            "repeats=0 loops forever."
         ),
     )
     async def create_animation_tag(
@@ -120,7 +142,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         repeats: int = 0,
     ) -> str:
         return as_json(
-            await ctx.bridge.call(
+            await ctx.call(
                 "tag.create",
                 {
                     "name": name,
@@ -135,8 +157,8 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
         title="Update animation tag",
         description=(
-            "Change an existing tag. Only the fields you pass are modified; repeats of 0 "
-            "means loop indefinitely."
+            "Change a tag's name, range, direction or repeats; only the fields you pass "
+            "change."
         ),
     )
     async def update_animation_tag(
@@ -161,11 +183,11 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             raise BridgeError(
                 ErrorCode.INVALID_PARAMS, "Nothing to update: pass at least one field to change."
             )
-        return as_json(await ctx.bridge.call("tag.update", params))
+        return as_json(await ctx.call("tag.update", params))
 
     @mcp.tool(
         title="Delete animation tag",
-        description="Delete a tag. The frames themselves are untouched.",
+        description="Delete a tag. The frames themselves are kept.",
     )
     async def delete_animation_tag(name: str) -> str:
-        return as_json(await ctx.bridge.call("tag.delete", {"name": name}))
+        return as_json(await ctx.call("tag.delete", {"name": name}))

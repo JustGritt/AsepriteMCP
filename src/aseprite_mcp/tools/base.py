@@ -13,6 +13,7 @@ import logging
 import shutil
 import tempfile
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -26,12 +27,22 @@ from ..config import Config
 log = logging.getLogger(__name__)
 
 
+# Set by the batch tool while it collects commands: each tool then validates and
+# encodes its arguments as usual, but its command is recorded instead of sent.
+_recording: ContextVar[list[tuple[str, dict[str, Any]]] | None] = ContextVar(
+    "aseprite_mcp_recording", default=None
+)
+
+
 @dataclass
 class ToolContext:
     """Everything a tool needs, in one injectable object."""
 
     bridge: AsepriteBridge
     config: Config
+    # The most recent draw_rows legend, so a run of edits in the same colors does
+    # not have to restate it. Memory only: it is gone when the server restarts.
+    last_legend: dict[str, str | int] | None = field(default=None, init=False, repr=False)
     _temp_dir: Path | None = field(default=None, init=False, repr=False)
 
     @property
@@ -45,15 +56,37 @@ class ToolContext:
             self._temp_dir = Path(tempfile.mkdtemp(prefix="aseprite-mcp-"))
         return self._temp_dir
 
+    async def call(
+        self, command: str, params: dict[str, Any] | None = None, timeout: float | None = None
+    ) -> dict[str, Any]:
+        """Send one command to Aseprite, or record it when a batch is collecting."""
+        recording = _recording.get()
+        if recording is not None:
+            recording.append((command, dict(params or {})))
+            return {}
+        return await self.bridge.call(command, params, timeout=timeout)
+
     def cleanup(self) -> None:
         if self._temp_dir is not None:
             shutil.rmtree(self._temp_dir, ignore_errors=True)
             self._temp_dir = None
 
 
+def _prune(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _prune(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [_prune(v) for v in value]
+    return value
+
+
 def as_json(payload: Any) -> str:
-    """Render a tool result as JSON the model can parse without ambiguity."""
-    return json.dumps(payload, indent=2, ensure_ascii=False)
+    """Render a tool result as compact JSON.
+
+    No indentation and no nulls: the model reads every byte of every reply, and
+    each reply stays in its context for the rest of the session.
+    """
+    return json.dumps(_prune(payload), separators=(",", ":"), ensure_ascii=False)
 
 
 async def render_to_image(
@@ -73,7 +106,7 @@ async def render_to_image(
     request["outPath"] = str(out_path)
 
     try:
-        result = await ctx.bridge.call(command, request, timeout=ctx.config.render_timeout)
+        result = await ctx.call(command, request, timeout=ctx.config.render_timeout)
         if not out_path.is_file():
             raise BridgeError(
                 ErrorCode.LUA_ERROR,

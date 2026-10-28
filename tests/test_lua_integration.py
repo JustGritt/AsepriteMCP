@@ -24,6 +24,7 @@ CANDIDATES = (
     r"C:\Program Files (x86)\Steam\steamapps\common\Aseprite\Aseprite.exe",
     r"Z:\Program Files (x86)\Steam\steamapps\common\Aseprite\Aseprite.exe",
     "/Applications/Aseprite.app/Contents/MacOS/aseprite",
+    "~/Library/Application Support/Steam/steamapps/common/Aseprite/Aseprite.app/Contents/MacOS/aseprite",
 )
 
 
@@ -32,8 +33,9 @@ def find_aseprite() -> str | None:
     if override:
         return override if Path(override).is_file() else None
     for candidate in CANDIDATES:
-        if Path(candidate).is_file():
-            return candidate
+        path = Path(candidate).expanduser()
+        if path.is_file():
+            return str(path)
     return shutil.which("aseprite")
 
 

@@ -745,6 +745,15 @@ Do not create complicated custom history if Aseprite's native history can provid
 
 Agents using this MCP should follow the workflow below.
 
+> **Revised for token cost (issue #10).** Every call re-reads the whole
+> conversation and every image stays in it, so the shipped workflow lives in the
+> server `INSTRUCTIONS` (`src/aseprite_mcp/server.py`) and in
+> [TOOLS.md](TOOLS.md#suggested-workflow), and differs from the original below:
+> one `get_sprite_info` replaces the four listings, edits are grouped with
+> `batch`, exact checks use text (`get_region`, `compare_frames`,
+> `get_animation_bounds`), and previews are zoomed with `region` and taken once
+> per batch rather than after every edit. The original text is kept for history.
+
 ## Before editing
 
 Always inspect:
@@ -985,7 +994,9 @@ Useful for detecting unwanted positional drift.
 
 # 20. Agent Editing Strategy
 
-Agents should make small iterative changes.
+Agents should make small iterative changes. Small does not have to mean many
+calls: with `batch`, one call can hold a step's 10–100 pixel edits plus the
+preview that inspects them.
 
 Preferred:
 

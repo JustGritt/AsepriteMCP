@@ -98,20 +98,24 @@ agent gets "retry this" rather than an opaque string.
 
 ## Commands
 
-34 commands back 33 MCP tools; `fs.probe` has no tool of its own and is called by
-`get_connection_status`.
+38 commands back 38 MCP tools. The mapping is not 1:1: `fs.probe` has no tool of
+its own and is called by `get_connection_status`; `draw_rows` and `draw_rect` are
+decoded on the server into `draw.pixels`; and `get_canvas_preview` sends
+`render.layer` when it is given a `layer`.
 
 | Command | Tool |
 |---|---|
 | `app.status`, `fs.probe` | `get_connection_status` |
 | `sprite.info`, `sprite.open`, `sprite.save` | sprite tools |
-| `layer.list`, `layer.select`, `layer.create`, `layer.delete`, `layer.setVisibility` | layer tools |
-| `frame.list`, `frame.select`, `frame.create`, `frame.duplicate`, `frame.delete`, `frame.setDuration` | frame tools |
+| `layer.select`, `layer.create`, `layer.delete`, `layer.setVisibility` | layer tools |
+| `frame.select`, `frame.create`, `frame.duplicate`, `frame.delete`, `frame.setDuration` | frame tools |
 | `draw.pixels`, `draw.erase`, `draw.clearCel`, `draw.fill`, `draw.line` | drawing tools |
+| `cel.shift`, `cel.flip`, `cel.copy`, `cel.replaceColor` | cel tools |
 | `render.canvas`, `render.layer`, `inspect.region`, `inspect.palette` | inspection tools |
-| `anim.info`, `render.contactSheet`, `render.onionSkin` | animation inspection |
-| `tag.list`, `tag.create`, `tag.update`, `tag.delete` | tag tools |
+| `anim.info`, `anim.compare`, `anim.bounds`, `render.contactSheet`, `render.onionSkin` | animation inspection |
+| `tag.create`, `tag.update`, `tag.delete` | tag tools |
 | `history.undo`, `history.redo` | `undo`, `redo` |
+| `batch.run` | `batch`: editing commands from the other rows, run in one transaction |
 
 The dispatch table is fixed at load. An unrecognised `command` is an
 `UNKNOWN_COMMAND` error and is never `load()`ed or evaluated.
@@ -123,8 +127,16 @@ own temp directory:
 
 ```json
 {"id": 7, "command": "render.canvas",
- "params": {"scale": 8, "frame": 2, "outPath": "C:\\...\\Temp\\aseprite-mcp-ab12\\9f3e.png"}}
+ "params": {"scale": 8, "frame": 2, "maxEdge": 768,
+            "region": {"x": 4, "y": 4, "width": 16, "height": 16},
+            "outPath": "C:\\...\\Temp\\aseprite-mcp-ab12\\9f3e.png"}}
 ```
+
+`maxEdge` caps the longest side of the output image. Lua uses the largest whole
+scale at or below `scale` that fits, and reports `scaleReduced` when it had to go
+lower. The server sends the cap with every render (`ASEPRITE_MCP_PREVIEW_MAX_EDGE`,
+or `ASEPRITE_MCP_SHEET_MAX_EDGE` for contact sheets), because image size is the
+main cost of a preview. `region` is optional and is clamped to the canvas.
 
 Lua writes the PNG there and replies with metadata only; the server reads the
 bytes, returns them as MCP image content, and deletes the file. `outPath` is
@@ -132,6 +144,15 @@ never model-supplied, so it cannot be aimed anywhere else.
 
 If the reply says `ok` but no file appeared, the server raises `LUA_ERROR`
 pointing at the file-access grant in [SETUP.md](SETUP.md) — the usual cause.
+
+## Drawing points
+
+`draw.pixels` points are `{x, y, color}` or `{x, y, index}`, or `{x, y, erase: true}`.
+An erase point writes transparent in the same transaction as the painted points,
+which is how `draw_rows(blank="erase")` stays one undo step. Erase points outside
+the existing cel are dropped, so they never grow it. Drawing replies carry
+`changed: [x, y, width, height]`, the box of pixels that call wrote, ready to pass
+as a preview `region`.
 
 ## Empty arrays
 

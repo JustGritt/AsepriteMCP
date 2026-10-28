@@ -101,8 +101,31 @@ test("sprite.info reports geometry", function()
   equals(info.width, 16, "width")
   equals(info.height, 12, "height")
   equals(info.colorMode, "rgb", "color mode")
-  equals(info.frameCount, 1, "frame count")
-  equals(info.layerCount, 1, "layer count")
+  equals(#info.frameMs, 1, "frame count")
+  equals(#info.layers, 1, "layer count")
+  equals(#info.tags, 0, "no tags")
+  sprite:close()
+end)
+
+test("sprite.info is the whole overview, compactly", function()
+  local sprite = newSprite(8, 8)
+  local top = call("layer.create", { name = "Arm" })
+  call("layer.setVisibility", { layer = top.id, visible = false })
+  call("frame.create", {})
+  call("frame.setDuration", { frame = 2, durationMs = 120 })
+  call("tag.create", { name = "idle", from = 1, to = 2, direction = "pingpong" })
+
+  local info = call("sprite.info")
+  equals(#info.layers, 2, "both layers listed")
+  equals(info.layers[1].name, "Arm", "top of the stack first")
+  equals(#info.layers[1].id, 8, "ids are 8 characters")
+  equals(info.layers[1].hidden, true, "hidden layer flagged")
+  equals(info.layers[2].hidden, nil, "visible layers carry no flag")
+  equals(info.layers[2].type, nil, "image layers carry no type")
+  equals(info.activeLayer, top.id, "active layer reported by id")
+  equals(info.frameMs[2], 120, "per-frame durations")
+  equals(info.tags[1].direction, "pingpong", "non-default direction kept")
+  equals(info.tags[1].repeats, nil, "default repeats left out")
   sprite:close()
 end)
 
@@ -118,26 +141,31 @@ test("commands fail cleanly with no sprite", function()
 end)
 
 print("=== layers ===")
-test("layer create, list, select, delete", function()
+test("layer create, select, delete", function()
   local sprite = newSprite()
   local created = call("layer.create", { name = "Character" })
-  check(created.uuid ~= nil, "new layer has a uuid")
+  check(created.id ~= nil, "new layer has an id")
   equals(created.name, "Character", "new layer name")
+  equals(#call("sprite.info").layers, 2, "two layers after create")
 
-  local list = call("layer.list")
-  equals(list.count, 2, "two layers after create")
+  local selected = call("layer.select", { layer = created.id })
+  equals(selected.name, "Character", "select by short id")
 
-  local selected = call("layer.select", { layer = created.uuid })
-  equals(selected.name, "Character", "select by uuid")
+  local uuid = tostring(sprite.layers[2].uuid)
+  equals(call("layer.select", { layer = uuid }).name, "Character", "select by full uuid")
+  equals(call("layer.select", { layer = uuid:sub(1, 6) }).name, "Character",
+    "select by a 6-character prefix")
+  expectError("layer.select", { layer = uuid:sub(1, 5) }, "INVALID_LAYER",
+    "five characters is too short to be an id")
 
   local byName = call("layer.select", { layer = "Character" })
   equals(byName.name, "Character", "select by name")
 
-  local visibility = call("layer.setVisibility", { layer = created.uuid, visible = false })
+  local visibility = call("layer.setVisibility", { layer = created.id, visible = false })
   equals(visibility.visible, false, "hide layer")
 
-  call("layer.delete", { layer = created.uuid })
-  equals(call("layer.list").count, 1, "one layer after delete")
+  call("layer.delete", { layer = created.id })
+  equals(#call("sprite.info").layers, 1, "one layer after delete")
   sprite:close()
 end)
 
@@ -156,7 +184,7 @@ test("frame duration round-trips in milliseconds", function()
   -- The real assertion: Aseprite stores seconds, the API speaks milliseconds.
   local stored = sprite.frames[1].duration
   check(math.abs(stored - 0.08) < 1e-6, "stored as 0.08 seconds, not 80")
-  equals(call("frame.list").frames[1].durationMs, 80, "reads back as 80ms")
+  equals(call("sprite.info").frameMs[1], 80, "reads back as 80ms")
   sprite:close()
 end)
 
@@ -218,12 +246,15 @@ test("draw.pixels writes and expands the cel", function()
 
   local first = call("draw.pixels", { pixels = { { x = 4, y = 4, color = "#e6a15c" } } })
   equals(first.written, 1, "wrote one pixel")
-  equals(first.celBounds.width, 1, "cel starts 1px wide")
+  equals(sprite.layers[1]:cel(1).bounds.width, 1, "cel starts 1px wide")
 
   local second = call("draw.pixels", { pixels = { { x = 9, y = 4, color = "#e6a15c" } } })
   equals(second.written, 1, "wrote a second pixel")
-  equals(second.celBounds.width, 6, "cel grew to span both pixels")
-  equals(second.celBounds.x, 4, "cel origin stayed at the first pixel")
+  equals(sprite.layers[1]:cel(1).bounds.width, 6, "cel grew to span both pixels")
+  equals(sprite.layers[1]:cel(1).bounds.x, 4, "cel origin stayed at the first pixel")
+  -- changed is the box of what this call wrote, not of the whole cel.
+  equals(second.changed[1], 9, "changed box starts at the new pixel")
+  equals(second.changed[3], 1, "changed box is one pixel wide")
 
   -- The original pixel must survive the expansion.
   local region = call("inspect.region", { x = 4, y = 4, width = 6, height = 1 })
@@ -244,6 +275,65 @@ test("draw.pixels clips off-canvas pixels", function()
   equals(result.written, 1, "wrote the in-bounds pixel")
   equals(result.skippedOffCanvas, 2, "skipped both out-of-bounds pixels")
   check(result.warning ~= nil, "warned about skipped pixels")
+  sprite:close()
+end)
+
+test("draw.pixels erase points clear in the same call", function()
+  local sprite = newSprite(8, 8)
+  call("draw.clearCel", {})
+  call("draw.pixels", { pixels = {
+    { x = 1, y = 1, color = "#ff0000ff" }, { x = 2, y = 1, color = "#ff0000ff" },
+  } })
+  local result = call("draw.pixels", { pixels = {
+    { x = 1, y = 1, erase = true },
+    { x = 6, y = 6, erase = true },  -- outside the cel: a no-op, must not grow it
+    { x = 3, y = 1, color = "#00ff00ff" },
+  } })
+  equals(result.erased, 1, "only the in-cel erase counts")
+  equals(result.written, 1, "one painted pixel")
+  local bounds = sprite.layers[1]:cel(1).bounds
+  equals(bounds.y + bounds.height, 2, "an erase outside the cel did not grow it")
+  local region = call("inspect.region", { x = 1, y = 1, width = 3, height = 1 })
+  equals(region.rows[1]:sub(1, 1), ".", "erased pixel is transparent")
+  check(region.rows[1]:sub(3, 3) ~= ".", "painted pixel is present")
+
+  local nothing = call("draw.pixels", { pixels = { { x = 7, y = 7, erase = true } } })
+  equals(nothing.written, 0, "nothing written")
+  check(nothing.note ~= nil, "explains that nothing changed")
+  sprite:close()
+end)
+
+test("get_region rows written back with erase reproduce the region", function()
+  -- The server's draw_rows decodes rows and legend into draw.pixels points the
+  -- same way; replaying that here proves the read and write formats meet.
+  local sprite = newSprite(8, 8)
+  call("draw.clearCel", {})
+  call("draw.pixels", { pixels = {
+    { x = 1, y = 1, color = "#ff0000ff" }, { x = 2, y = 1, color = "#00ff00ff" },
+    { x = 2, y = 2, color = "#0000ff80" },
+  } })
+  local before = call("inspect.region", { x = 0, y = 0, width = 4, height = 4 })
+
+  call("draw.pixels", { pixels = {
+    { x = 0, y = 0, color = "#ffffffff" }, { x = 1, y = 1, color = "#ffffffff" },
+  } })
+  local points = {}
+  for row = 1, #before.rows do
+    for col = 1, #before.rows[row] do
+      local char = before.rows[row]:sub(col, col)
+      if char == "." then
+        points[#points + 1] = { x = col - 1, y = row - 1, erase = true }
+      elseif char ~= " " then
+        points[#points + 1] = { x = col - 1, y = row - 1, color = before.legend[char] }
+      end
+    end
+  end
+  call("draw.pixels", { pixels = points })
+
+  local after = call("inspect.region", { x = 0, y = 0, width = 4, height = 4 })
+  for row = 1, #before.rows do
+    equals(after.rows[row], before.rows[row], "row " .. row .. " round-trips")
+  end
   sprite:close()
 end)
 
@@ -278,8 +368,8 @@ end)
 test("draw.line draws a full run", function()
   local sprite = newSprite(16, 16)
   local line = call("draw.line", { x1 = 0, y1 = 0, x2 = 5, y2 = 0, color = "#ff00ff" })
-  equals(line.length, 6, "six pixels along the run")
-  equals(line.written, 6, "all written")
+  equals(line.written, 6, "six pixels along the run, all written")
+  equals(line.changed[3], 6, "changed box spans the run")
 
   local region = call("inspect.region", { x = 0, y = 0, width = 6, height = 1 })
   equals(region.rows[1]:find("%.") , nil, "no gaps in the line")
@@ -317,6 +407,140 @@ test("draw.clearCel", function()
   sprite:close()
 end)
 
+print("=== cels ===")
+test("cel.shift moves pixels without redrawing", function()
+  local sprite = newSprite(8, 8)
+  call("draw.clearCel", {})
+  call("draw.pixels", { pixels = { { x = 2, y = 2, color = "#ff0000ff" } } })
+  local result = call("cel.shift", { dx = 1, dy = -1 })
+  equals(result.position[1], 3, "moved right")
+  equals(result.position[2], 1, "moved up")
+  local region = call("inspect.region", { x = 3, y = 1, width = 1, height = 1 })
+  check(region.rows[1] ~= ".", "pixel is at its new place")
+  call("history.undo", {})
+  equals(sprite.layers[1]:cel(1).position.x, 2, "one undo reverses the shift")
+  sprite:close()
+end)
+
+test("cel.shift refuses the background layer and empty cels", function()
+  local sprite = newSprite(8, 8)
+  app.command.BackgroundFromLayer()
+  expectError("cel.shift", { dx = 1 }, "INVALID_LAYER", "background cannot move")
+  sprite:close()
+  local other = newSprite(8, 8)
+  call("draw.clearCel", {})
+  expectError("cel.shift", { dx = 1 }, "INVALID_PARAMS", "nothing to shift")
+  other:close()
+end)
+
+test("cel.flip mirrors within the canvas", function()
+  local sprite = newSprite(8, 4)
+  call("draw.clearCel", {})
+  call("draw.pixels", { pixels = {
+    { x = 1, y = 1, color = "#ff0000ff" }, { x = 2, y = 1, color = "#00ff00ff" },
+  } })
+  call("cel.flip", { direction = "horizontal" })
+  local row = call("inspect.region", { x = 0, y = 1, width = 8, height = 1 }).rows[1]
+  equals(row:sub(1, 5), ".....", "left side is now empty")
+  check(row:sub(6, 6) ~= "." and row:sub(7, 7) ~= ".", "pixels mirrored to the right")
+  check(row:sub(6, 6) ~= row:sub(7, 7), "and their order reversed")
+  call("cel.flip", { direction = "vertical" })
+  local below = call("inspect.region", { x = 0, y = 2, width = 8, height = 1 }).rows[1]
+  check(below:sub(6, 6) ~= ".", "vertical flip moved the row from y=1 to y=2")
+  sprite:close()
+end)
+
+test("cel.copy duplicates a cel onto another frame and layer", function()
+  local sprite = newSprite(8, 8)
+  call("draw.pixels", { pixels = { { x = 4, y = 4, color = "#ffffffff" } } })
+  call("frame.create", {})
+  local top = call("layer.create", { name = "Shadow" })
+  local result = call("cel.copy", {
+    fromLayer = sprite.layers[1].name, fromFrame = 1, toLayer = top.id, toFrame = 2,
+  })
+  equals(result.to.layer, "Shadow", "copied to the other layer")
+  local region = call("inspect.region", { x = 4, y = 4, width = 1, height = 1, frame = 2, layer = top.id })
+  check(region.rows[1] ~= ".", "pixel arrived in frame 2")
+  expectError("cel.copy", { fromFrame = 1, toFrame = 1 }, "INVALID_PARAMS",
+    "copying a cel onto itself is rejected")
+  sprite:close()
+end)
+
+test("cel.replaceColor recolors across frames in one step", function()
+  local sprite = newSprite(8, 8)
+  call("draw.clearCel", {})
+  call("draw.pixels", { pixels = {
+    { x = 1, y = 1, color = "#0000ffff" }, { x = 2, y = 1, color = "#0000ffff" },
+    { x = 3, y = 1, color = "#00ff00ff" },
+  } })
+  call("frame.duplicate", { frame = 1 })
+  local result = call("cel.replaceColor", { from = "#0000ffff", to = "#ff0000ff", frames = "all" })
+  equals(result.replaced, 4, "two pixels in each of two frames")
+  equals(result.frames, 2, "both frames touched")
+  equals(result.changed[3], 2, "changed box covers the recolored run")
+  local region = call("inspect.region", { x = 1, y = 1, width = 3, height = 1, frame = 2 })
+  equals(region.legend[region.rows[1]:sub(1, 1)], "#ff0000ff", "frame 2 recolored")
+  equals(region.legend[region.rows[1]:sub(3, 3)], "#00ff00ff", "other colors untouched")
+  call("history.undo", {})
+  local undone = call("inspect.region", { x = 1, y = 1, width = 1, height = 1, frame = 2 })
+  equals(undone.legend[undone.rows[1]], "#0000ffff", "one undo reverses every frame")
+
+  local scoped = call("cel.replaceColor", {
+    from = "#0000ffff", to = "#ff0000ff", region = { x = 2, y = 0, width = 4, height = 4 },
+  })
+  equals(scoped.replaced, 1, "region limits the swap")
+  local none = call("cel.replaceColor", { from = "#123456ff", to = "#ff0000ff" })
+  equals(none.replaced, 0, "no match")
+  check(none.note ~= nil, "and says so")
+  sprite:close()
+end)
+
+print("=== batch ===")
+test("batch.run applies several commands as one undo step", function()
+  local sprite = newSprite(8, 8)
+  call("draw.clearCel", {})
+  call("draw.pixels", { pixels = { { x = 2, y = 2, color = "#ff0000ff" } } })
+  local reply = call("batch.run", { ops = {
+    { command = "frame.duplicate", params = { frame = 1 } },
+    { command = "cel.shift", params = { dy = -1, frame = 2 } },
+    { command = "draw.pixels", params = { frame = 2, pixels = { { x = 5, y = 5, color = "#00ff00ff" } } } },
+  } })
+  equals(reply.applied, 3, "three ops applied")
+  equals(reply.results[1].frame, 2, "per-op results come back in order")
+  equals(#sprite.frames, 2, "frame duplicated")
+  equals(sprite.layers[1]:cel(2).position.y, 1, "copy shifted up")
+
+  call("history.undo", {})
+  equals(#sprite.frames, 1, "one undo reverses the whole batch")
+  sprite:close()
+end)
+
+test("batch.run is all or nothing", function()
+  local sprite = newSprite(8, 8)
+  expectError("batch.run", { ops = {
+    { command = "frame.create", params = {} },
+    { command = "frame.setDuration", params = { frame = 9, durationMs = 80 } },
+  } }, "INVALID_FRAME", "the failing op's code is reported")
+  equals(#sprite.frames, 1, "the frame created before the failure was rolled back")
+  local ok, err = pcall(dispatch["batch.run"], { ops = {
+    { command = "frame.create", params = {} },
+    { command = "draw.pixels", params = { pixels = {} } },
+  } })
+  check(not ok and err.message:find("ops%[1%] %(draw.pixels%)") ~= nil, "message names the op")
+  check(err.message:find("rolled back") ~= nil, "and says nothing changed")
+  sprite:close()
+end)
+
+test("batch.run refuses commands that cannot nest", function()
+  local sprite = newSprite(8, 8)
+  for _, command in ipairs({ "history.undo", "render.canvas", "sprite.save", "batch.run", "nope" }) do
+    expectError("batch.run", { ops = { { command = command, params = {} } } },
+      "INVALID_PARAMS", command .. " is not batchable")
+  end
+  expectError("batch.run", { ops = {} }, "INVALID_PARAMS", "empty batch")
+  sprite:close()
+end)
+
 print("=== indexed color ===")
 test("indexed sprites snap to the palette", function()
   local sprite = newSprite(8, 8, ColorMode.INDEXED)
@@ -340,8 +564,9 @@ test("indexed sprites snap to the palette", function()
     "palette index out of range")
 
   local pal = call("inspect.palette")
-  equals(pal.size, 4, "palette size")
+  equals(#pal.colors, 4, "palette size")
   equals(pal.colorMode, "indexed", "color mode reported")
+  equals(pal.colors[2], "#ff0000", "opaque entries omit alpha")
   sprite:close()
 end)
 
@@ -360,7 +585,8 @@ test("inspect.region produces a character map", function()
   equals(#region.rows, 2, "two rows")
   equals(#region.rows[1], 4, "four columns")
   equals(region.rows[2], "....", "empty row is all dots")
-  equals(region.legend["."], "#00000000", "dot means transparent")
+  equals(region.legend["."], nil, "dot is documented once, not repeated per reply")
+  equals(region.reading, nil, "no per-reply reading boilerplate")
   equals(region.distinctColors, 1, "one distinct color")
   local symbol = region.rows[1]:sub(1, 1)
   equals(region.legend[symbol], "#ff0000ff", "legend maps the drawn color")
@@ -397,6 +623,41 @@ test("render.canvas clamps an oversized scale", function()
   sprite:close()
 end)
 
+test("render.canvas respects the long-edge cap", function()
+  local sprite = newSprite(128, 64)
+  local result = call("render.canvas", { scale = 8, maxEdge = 768, outPath = tempPath("capped.png") })
+  equals(result.scale, 6, "largest whole scale whose long edge fits 768")
+  equals(result.scaleReduced, true, "reduction is reported")
+  local small = newSprite(32, 32)
+  local kept = call("render.canvas", { scale = 8, maxEdge = 768, outPath = tempPath("small.png") })
+  equals(kept.scale, 8, "small sprites keep the requested scale")
+  small:close()
+  sprite:close()
+end)
+
+test("render.canvas zooms into a region", function()
+  local sprite = newSprite(32, 32)
+  call("draw.pixels", { pixels = { { x = 10, y = 10, color = "#ff8800ff" } } })
+  local out = tempPath("zoom.png")
+  local result = call("render.canvas", {
+    scale = 16, maxEdge = 768, region = { x = 8, y = 8, width = 4, height = 4 }, outPath = out,
+  })
+  equals(result.region[3], 4, "region width reported")
+  equals(result.scale, 16, "a small region keeps a high scale")
+  check(result.empty == nil, "the region holds the drawn pixel")
+  local png = Image{ fromFile = out }
+  equals(png.width, 64, "output is the region at 16x")
+
+  local clipped = call("render.canvas", {
+    scale = 2, region = { x = 30, y = 30, width = 10, height = 10 }, outPath = tempPath("clip.png"),
+  })
+  equals(clipped.region[3], 2, "region is clamped to the canvas")
+  expectError("render.canvas", {
+    scale = 2, region = { x = 40, y = 40, width = 4, height = 4 }, outPath = tempPath("off.png"),
+  }, "INVALID_PARAMS", "a region entirely off the canvas is rejected")
+  sprite:close()
+end)
+
 test("render.canvas of an indexed sprite", function()
   -- The interesting case: image:saveAs needs a palette for indexed images, which
   -- is why previews composite into RGB first.
@@ -410,9 +671,9 @@ end)
 test("render.layer isolates one layer", function()
   local sprite = newSprite(8, 8)
   local top = call("layer.create", { name = "Top" })
-  call("draw.pixels", { pixels = { { x = 1, y = 1, color = "#00ff00ff" } }, layer = top.uuid })
+  call("draw.pixels", { pixels = { { x = 1, y = 1, color = "#00ff00ff" } }, layer = top.id })
   local out = tempPath("layer.png")
-  local result = call("render.layer", { layer = top.uuid, scale = 2, outPath = out })
+  local result = call("render.layer", { layer = top.id, scale = 2, outPath = out })
   equals(result.layer, "Top", "rendered the requested layer")
   check(app.fs.isFile(out), "layer png written")
 
@@ -435,7 +696,19 @@ test("render.contactSheet labels every frame", function()
   equals(result.frameCount, 3, "three frames")
   equals(#result.cells, 3, "three cells described")
   equals(result.cells[3].durationMs, 120, "per-cell duration reported")
-  equals(result.columns, 3, "single row by default")
+  equals(result.columns, 2, "near-square grid by default")
+  equals(result.rows, 2, "three frames wrap onto a second row")
+  sprite:close()
+end)
+
+test("render.contactSheet fits the long-edge cap", function()
+  local sprite = newSprite(64, 64)
+  for i = 1, 8 do call("frame.duplicate", { frame = i }) end
+  local result = call("render.contactSheet", { scale = 8, maxEdge = 1280, outPath = tempPath("cap.png") })
+  equals(result.columns, 3, "nine frames make a 3x3 grid")
+  local png = Image{ fromFile = tempPath("cap.png") }
+  check(png.width <= 1280 and png.height <= 1280, "sheet fits the cap")
+  check(result.scale >= 6, "and uses the largest scale that fits")
   sprite:close()
 end)
 
@@ -471,6 +744,44 @@ test("render.onionSkin reports neighbours", function()
   sprite:close()
 end)
 
+print("=== frame comparison ===")
+test("anim.compare reports what moved, as numbers", function()
+  local sprite = newSprite(8, 8)
+  call("draw.clearCel", {})
+  call("draw.pixels", { pixels = {
+    { x = 2, y = 2, color = "#ff0000ff" }, { x = 3, y = 2, color = "#ff0000ff" },
+  } })
+  call("frame.duplicate", { frame = 1 })
+  local same = call("anim.compare", { a = 1, b = 2 })
+  equals(same.changedPixels, 0, "a duplicate is identical")
+  equals(same.changed, nil, "no changed box")
+
+  call("cel.shift", { dx = 1, frame = 2 })
+  call("draw.pixels", { frame = 2, pixels = { { x = 3, y = 2, color = "#00ff00ff" } } })
+  local diff = call("anim.compare", { a = 1, b = 2, diffMap = true })
+  equals(diff.appeared, 1, "the pixel shifted onto empty space appeared")
+  equals(diff.vanished, 1, "the pixel it left vanished")
+  equals(diff.recolored, 1, "one pixel changed color")
+  equals(diff.diff[1], "-*+", "diff map marks each kind")
+  equals(diff.boundsB[1], 3, "frame b's bounds moved right")
+  sprite:close()
+end)
+
+test("anim.bounds exposes drift across frames", function()
+  local sprite = newSprite(8, 8)
+  call("draw.clearCel", {})
+  call("draw.pixels", { pixels = { { x = 2, y = 2, color = "#ffffffff" } } })
+  call("frame.duplicate", { frame = 1 })
+  call("cel.shift", { dy = 1, frame = 2 })
+  call("frame.create", {})
+  local result = call("anim.bounds", {})
+  equals(result.frames[1].bounds[2], 2, "frame 1 at y=2")
+  equals(result.frames[2].bounds[2], 3, "frame 2 drifted to y=3")
+  equals(result.frames[3].empty, true, "empty frame flagged")
+  equals(result.union[4], 2, "union spans both positions")
+  sprite:close()
+end)
+
 print("=== tags ===")
 test("tag lifecycle", function()
   local sprite = newSprite(8, 8)
@@ -482,7 +793,7 @@ test("tag lifecycle", function()
   equals(created.to, 6, "tag end")
   equals(created.direction, "pingpong", "tag direction")
 
-  equals(call("tag.list").count, 1, "one tag listed")
+  equals(#call("sprite.info").tags, 1, "one tag listed")
 
   local renamed = call("tag.update", { name = "attack", newName = "slash" })
   equals(renamed.name, "slash", "renamed in place")
@@ -503,7 +814,7 @@ test("tag lifecycle", function()
     "reversed range")
 
   call("tag.delete", { name = "slash" })
-  equals(call("tag.list").count, 0, "tag deleted")
+  equals(#call("sprite.info").tags, 0, "tag deleted")
   sprite:close()
 end)
 
@@ -521,16 +832,16 @@ test("undo reverses exactly one command", function()
   local sprite = newSprite(8, 8)
   call("draw.pixels", { pixels = { { x = 1, y = 1, color = "#ffffffff" } } })
   call("layer.create", { name = "Extra" })
-  equals(call("layer.list").count, 2, "layer added")
+  equals(#call("sprite.info").layers, 2, "layer added")
 
   call("history.undo")
-  equals(call("layer.list").count, 1, "undo removed the layer only")
+  equals(#call("sprite.info").layers, 1, "undo removed the layer only")
 
   local region = call("inspect.region", { x = 1, y = 1, width = 1, height = 1 })
   check(region.rows[1] ~= ".", "the earlier pixel survived the undo")
 
   call("history.redo")
-  equals(call("layer.list").count, 2, "redo restored the layer")
+  equals(#call("sprite.info").layers, 2, "redo restored the layer")
   sprite:close()
 end)
 

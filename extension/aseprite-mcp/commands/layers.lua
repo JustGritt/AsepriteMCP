@@ -4,39 +4,11 @@ return function(deps)
   local proto, doc = deps.proto, deps.doc
   local M = {}
 
-  M["layer.list"] = function()
-    local sprite = doc.activeSprite()
-    local active = app.layer
-    local layers = {}
-    for _, entry in ipairs(doc.allLayers(sprite)) do
-      local layer = entry.layer
-      local kind = "image"
-      if layer.isGroup then
-        kind = "group"
-      elseif layer.isTilemap then
-        kind = "tilemap"
-      end
-      layers[#layers + 1] = {
-        uuid = doc.layerId(layer),
-        name = layer.name,
-        type = kind,
-        visible = layer.isVisible,
-        editable = layer.isEditable,
-        opacity = layer.isGroup and nil or layer.opacity,
-        isBackground = layer.isBackground or false,
-        depth = entry.depth,
-        parent = entry.parent,
-        active = (active ~= nil and layer == active),
-      }
-    end
-    return { layers = proto.array(layers), count = #layers }
-  end
-
   M["layer.select"] = function(params)
     local sprite = doc.activeSprite()
     local layer = doc.resolveLayer(sprite, params.layer)
     app.layer = layer
-    return { uuid = doc.layerId(layer), name = layer.name }
+    return { id = doc.shortId(sprite, layer), name = layer.name }
   end
 
   M["layer.create"] = function(params)
@@ -53,7 +25,7 @@ return function(deps)
     end)
     app.layer = created
     return {
-      uuid = doc.layerId(created),
+      id = doc.shortId(sprite, created),
       name = created.name,
       stackIndex = created.stackIndex,
     }
@@ -68,11 +40,11 @@ return function(deps)
         "Refusing to delete the only top-level layer; a sprite must keep at least one."
       )
     end
-    local name, uuid = layer.name, doc.layerId(layer)
+    local name = layer.name
     app.transaction("mcp: delete layer", function()
       sprite:deleteLayer(layer)
     end)
-    return { deleted = name, uuid = uuid, layerCount = #doc.allLayers(sprite) }
+    return { deleted = name, layerCount = #doc.allLayers(sprite) }
   end
 
   M["layer.setVisibility"] = function(params)
@@ -82,7 +54,7 @@ return function(deps)
       proto.fail(proto.ERROR.INVALID_PARAMS, "visible must be true or false.")
     end
     layer.isVisible = params.visible
-    return { uuid = doc.layerId(layer), name = layer.name, visible = layer.isVisible }
+    return { id = doc.shortId(sprite, layer), name = layer.name, visible = layer.isVisible }
   end
 
   return M
