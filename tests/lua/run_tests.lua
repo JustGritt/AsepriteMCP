@@ -910,6 +910,21 @@ test("unknown command is rejected by name", function()
 end)
 
 print("=== wire path ===")
+test("empty arrays encode as [] on the wire", function()
+  -- Caught live: the encoder spaces the placeholder differently from the
+  -- pattern that rewrites it, so empty lists reached the server as objects.
+  local proto = core.proto
+  local text = proto.encode({ tags = proto.array({}), nested = { list = proto.array({}) } })
+  check(text:find("__emptyArray") == nil, "no placeholder leaks: " .. text)
+  local decoded = json.decode(text)
+  equals(#decoded.tags, 0, "tags decode as an empty list")
+  check(text:find('"tags":%s*%[%]') ~= nil, "tags is []")
+  local sprite = newSprite(4, 4)
+  local wire = proto.successMessage(1, call("sprite.info"))
+  check(wire:find("__emptyArray") == nil, "a real sprite.info reply has no placeholder")
+  sprite:close()
+end)
+
 -- Everything above calls handlers directly, which cannot catch a decoding bug.
 -- These drive a raw JSON string through the exact decode-dispatch-reply path the
 -- socket uses. That gap is how a type(x) == "table" guard shipped that rejected

@@ -15,7 +15,9 @@ Conventions:
 - **Durations are milliseconds** everywhere. Aseprite stores seconds; the Lua
   side converts.
 - **Layers** are addressed by the 8-character `id` from `get_sprite_info` (a
-  prefix of the layer's uuid, stable across renames and reordering), by any
+  prefix of the layer's uuid, stable across renames and reordering while the
+  document stays open; reopening the file assigns new ids, so read
+  `get_sprite_info` or the `open_sprite` reply again after opening), by any
   unique uuid prefix of at least 6 characters or the full uuid, or by exact name
   (rejected when ambiguous).
 - **Colours** are `#RGB`, `#RGBA`, `#RRGGBB` or `#RRGGBBAA`, case-insensitive.
