@@ -90,6 +90,36 @@ class TestSprite:
         payload = json_of(await ok(mcp, "get_sprite_info"))
         assert payload["colorMode"] == "indexed"
 
+    async def test_new_sprite(self, server, aseprite):
+        mcp, _ = server
+        await ok(mcp, "new_sprite", width=32, height=16)
+        assert aseprite.last("sprite.new")["params"] == {"width": 32, "height": 16, "colorMode": "rgb"}
+
+    async def test_new_sprite_saved_into_the_sandbox(self, server, aseprite, sandbox):
+        mcp, _ = server
+        await ok(mcp, "new_sprite", width=16, height=16, color_mode="indexed", path="icons/potion.aseprite")
+        params = aseprite.last("sprite.new")["params"]
+        assert params["path"] == str(sandbox / "icons" / "potion.aseprite")
+        assert params["colorMode"] == "indexed"
+        assert (sandbox / "icons").is_dir(), "parent directory is created for Aseprite to write into"
+
+    async def test_new_sprite_never_overwrites(self, server, aseprite, sandbox):
+        mcp, _ = server
+        (sandbox / "hero.aseprite").write_bytes(b"work")
+        message = await err(mcp, "new_sprite", width=8, height=8, path="hero.aseprite")
+        assert "already exists" in message
+        assert not aseprite.requests
+
+    @pytest.mark.parametrize(("w", "h"), [(0, 8), (8, 0), (1025, 8)])
+    async def test_new_sprite_size_limits(self, server, aseprite, w, h):
+        mcp, _ = server
+        assert "INVALID_PARAMS" in await err(mcp, "new_sprite", width=w, height=h)
+        assert not aseprite.requests
+
+    async def test_new_sprite_rejects_png(self, server, aseprite):
+        mcp, _ = server
+        assert "PATH_NOT_ALLOWED" in await err(mcp, "new_sprite", width=8, height=8, path="flat.png")
+
     async def test_open_sends_an_absolute_path(self, server, aseprite, sandbox):
         mcp, _ = server
         (sandbox / "hero.aseprite").write_bytes(b"")
@@ -356,6 +386,27 @@ class TestDrawRows:
         assert "nothing to draw" in await err(
             mcp, "draw_rows", x=0, y=0, rows=["..", "  "], legend={"a": "#fff"}
         )
+
+    async def test_uneven_rows_in_erase_mode_are_flagged(self, server, aseprite):
+        mcp, _ = server
+        payload = json_of(await ok(
+            mcp, "draw_rows", x=0, y=0, rows=["a..", "a...", "a.."], legend={"a": "#fff"}, blank="erase"
+        ))
+        assert "4 wide (rows 1)" in payload["warning"]
+
+    async def test_uneven_rows_are_fine_when_skipping(self, server, aseprite):
+        mcp, _ = server
+        payload = json_of(await ok(mcp, "draw_rows", x=0, y=0, rows=["aa", "aaaa"], legend={"a": "#fff"}))
+        assert "warning" not in payload
+
+    async def test_row_warning_joins_an_aseprite_warning(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("draw.pixels", {"warning": "1 pixel(s) fell outside the 2x2 canvas."})
+        payload = json_of(await ok(
+            mcp, "draw_rows", x=0, y=0, rows=["a", "a."], legend={"a": "#fff"}, blank="erase"
+        ))
+        assert payload["warning"].startswith("1 pixel(s) fell outside")
+        assert "Rows differ in length" in payload["warning"]
 
     async def test_pixel_cap(self, server, aseprite, config):
         mcp, _ = server
@@ -712,6 +763,7 @@ class TestHistory:
 MINIMAL_ARGUMENTS = {
     "get_connection_status": {},
     "get_sprite_info": {},
+    "new_sprite": {"width": 8, "height": 8},
     "open_sprite": {"path": "fixture.aseprite"},
     "save_sprite": {},
     "select_layer": {"layer": "Character"},

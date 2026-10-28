@@ -42,13 +42,19 @@ return function(deps)
     local bounds = before and before.bounds
 
     local addNote, notes = noteCollector()
-    local points, erased = {}, 0
+    local points, erased, erasedOffCanvas = {}, 0, 0
     for i, p in ipairs(pixels) do
       if type(p.x) ~= "number" or type(p.y) ~= "number" then
         proto.failf(proto.ERROR.INVALID_PARAMS, "pixels[%d] needs numeric x and y.", i)
       end
       local x, y = math.floor(p.x), math.floor(p.y)
       if p.erase then
+        -- Counted so an over-long draw_rows row is reported rather than
+        -- silently clipped; erasing inside the canvas but outside the cel is
+        -- just a no-op and needs no warning.
+        if x < 0 or y < 0 or x >= sprite.width or y >= sprite.height then
+          erasedOffCanvas = erasedOffCanvas + 1
+        end
         if bounds and x >= bounds.x and y >= bounds.y
           and x < bounds.x + bounds.width and y < bounds.y + bounds.height
           and x >= 0 and y >= 0 and x < sprite.width and y < sprite.height then
@@ -80,7 +86,8 @@ return function(deps)
         and "Nothing changed: every pixel was an erase outside the existing cel."
         or nil,
     }
-    if skipped and skipped > 0 then
+    skipped = (skipped or 0) + erasedOffCanvas
+    if skipped > 0 then
       result.skippedOffCanvas = skipped
       result.warning = string.format(
         "%d pixel(s) fell outside the %dx%d canvas and were ignored.",

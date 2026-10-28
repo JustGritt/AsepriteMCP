@@ -129,6 +129,45 @@ test("sprite.info is the whole overview, compactly", function()
   sprite:close()
 end)
 
+test("sprite.new creates, activates and optionally saves", function()
+  local info = call("sprite.new", { width = 24, height = 12, colorMode = "indexed" })
+  equals(info.width, 24, "width")
+  equals(info.height, 12, "height")
+  equals(info.colorMode, "indexed", "color mode")
+  equals(#info.layers, 1, "one layer")
+  equals(#info.frameMs, 1, "one frame")
+  equals(app.sprite.width, 24, "the new sprite is the active one")
+  app.sprite:close()
+
+  local path = tempPath("new_saved.aseprite")
+  local saved = call("sprite.new", { width = 8, height = 8, path = path })
+  check(app.fs.isFile(path), "file written")
+  equals(saved.path, path, "overview reports where it was saved")
+  app.sprite:close()
+
+  expectError("sprite.new", { width = 8, height = 8, colorMode = "cmyk" }, "INVALID_PARAMS",
+    "unknown color mode")
+  expectError("sprite.new", { width = 0, height = 8 }, "INVALID_PARAMS", "zero width")
+end)
+
+test("sprite.open replies with the same overview as sprite.info", function()
+  local sprite = newSprite(8, 8)
+  call("layer.create", { name = "Arm" })
+  call("frame.create", {})
+  local path = tempPath("overview.aseprite")
+  call("sprite.save", { path = path })
+  sprite:close()
+
+  local opened = call("sprite.open", { path = path })
+  local info = call("sprite.info")
+  equals(#opened.layers, 2, "layers included")
+  equals(#opened.frameMs, 2, "frames included")
+  equals(opened.layers[1].id, info.layers[1].id, "same ids as sprite.info")
+  equals(opened.activeLayer, info.activeLayer, "same active layer")
+  equals(opened.filename, nil, "the old reply shape is gone")
+  app.sprite:close()
+end)
+
 test("app.status without a document", function()
   for _, s in ipairs(app.sprites) do s:close() end
   local status = call("app.status")
@@ -296,6 +335,12 @@ test("draw.pixels erase points clear in the same call", function()
   local region = call("inspect.region", { x = 1, y = 1, width = 3, height = 1 })
   equals(region.rows[1]:sub(1, 1), ".", "erased pixel is transparent")
   check(region.rows[1]:sub(3, 3) ~= ".", "painted pixel is present")
+
+  local overlong = call("draw.pixels", { pixels = {
+    { x = 1, y = 1, color = "#ff0000ff" }, { x = 8, y = 1, erase = true },
+  } })
+  equals(overlong.skippedOffCanvas, 1, "an erase past the canvas edge is reported")
+  check(overlong.warning ~= nil, "with a warning")
 
   local nothing = call("draw.pixels", { pixels = { { x = 7, y = 7, erase = true } } })
   equals(nothing.written, 0, "nothing written")

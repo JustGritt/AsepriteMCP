@@ -21,10 +21,10 @@ from aseprite_mcp.usage import MAX_IMAGE_TOKENS, estimate_image_tokens, png_size
 
 from tests.conftest import text_of, tiny_png
 
-# Measured on 38 tools (13 360 bytes; main was 19 863 for 33) after slimming the
-# listed schemas and trimming descriptions, plus a little headroom. Raise it only
-# on purpose, for a tool that earns its place.
-TOOL_LIST_BUDGET = 13_750
+# Measured on 39 tools (13 923 bytes; main was 19 863 for 33), plus a little
+# headroom. new_sprite added ~560 bytes: without it an agent cannot start a
+# sprite at all (#12). Raise this only on purpose, for a tool that earns its place.
+TOOL_LIST_BUDGET = 14_250
 
 
 def compact(value) -> int:

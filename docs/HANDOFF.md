@@ -9,15 +9,15 @@ saves the most time.
 
 Phases 1–5 of [ASEPRITE_MCP.md](ASEPRITE_MCP.md) are built and verified end to
 end, and the connect dialog that replaced the old menu entries is in.
-**38 MCP tools** drive a live Aseprite session over a loopback WebSocket, on top
-of 38 Lua commands. The mapping is not 1:1: `app.status` and `fs.probe` are called
+**39 MCP tools** drive a live Aseprite session over a loopback WebSocket, on top
+of 39 Lua commands. The mapping is not 1:1: `app.status` and `fs.probe` are called
 by the server rather than exposed, and `draw_rows` / `draw_rect` are decoded into
 `draw.pixels` server-side. Token-cost work is tracked in GitHub issue #10.
 
 | | |
 | --- | --- |
-| Python tests | 273 passing |
-| Lua assertions | 308 passing, against the real engine |
+| Python tests | 285 passing |
+| Lua assertions | 325 passing, against the real engine |
 | End-to-end | 34/34 spec §29 workflow, from the session that landed `593bf03` |
 | Aseprite | 1.3.18.3, `apiVersion` 41, Steam build |
 

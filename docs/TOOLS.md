@@ -1,6 +1,6 @@
 # Tool reference
 
-38 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
+39 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
 its place only if it helps the agent understand, modify, inspect or safely
 preserve the sprite.
 
@@ -57,10 +57,18 @@ the structure:
 This replaces separate layer, frame and tag listings. Each listing was one more
 model turn that re-read the whole context.
 
+### `new_sprite(width, height, color_mode="rgb", path=None)`
+Creates a blank sprite (one layer, one frame) and makes it active. Each side is
+limited to 1–1024 pixels (`Config.max_sprite_size`). With `path` it is also saved
+there, so a later `save_sprite()` needs no path. That must be a new `.aseprite`
+or `.ase` file inside an allowed directory: an existing file is refused rather
+than overwritten. Replies with the same overview as `get_sprite_info`.
+
 ### `open_sprite(path)`
 Opens a file and makes it active. Accepts `.aseprite`, `.ase`, `.png`. Relative
 paths resolve against the first allowed directory. Outside the sandbox →
-`PATH_NOT_ALLOWED`.
+`PATH_NOT_ALLOWED`. Replies with the same overview as `get_sprite_info`, so no
+read has to follow.
 
 ### `save_sprite(path=None)`
 Saves over the source file, or to `path`. Only `.aseprite` / `.ase` may be
@@ -131,6 +139,10 @@ region, edit the map and write it back. Row 0 lands at `y`, column 0 at `x`.
   overlays. `blank="erase"` clears them in the same undo step, for an exact
   replacement.
 - ` ` (space) is always skipped, matching `get_region`'s off-canvas marker.
+- The reply carries a `warning` when characters fall outside the canvas
+  (`skippedOffCanvas`), or when rows differ in length with `blank="erase"`. That
+  is almost always a miscounted row, which otherwise only shows up as a shape one
+  column off in the next preview.
 
 ### `draw_rect(x, y, width, height, color, filled=True, layer=None, frame=None)`
 A filled rectangle, or a 1px outline with `filled=false`.

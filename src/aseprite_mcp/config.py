@@ -59,6 +59,9 @@ class Config:
     # Caps that stop a single call from stalling Aseprite or flooding the agent.
     max_pixels_per_call: int = 20000
     max_region_pixels: int = 4096
+    # new_sprite's limit per side. Pixel art rarely needs more, and every
+    # per-pixel Lua loop (renders, compare, recolor) scales with the area.
+    max_sprite_size: int = 1024
 
     # Longest edge of a rendered image, in pixels. An image costs the model about
     # width*height/750 tokens and stays in its context for the rest of the
