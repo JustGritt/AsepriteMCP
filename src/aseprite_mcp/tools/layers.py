@@ -1,8 +1,10 @@
 """Layer tools (spec section 9).
 
 Layers are addressed by the stable ``uuid`` Aseprite assigns them, which is what
-spec section 9 asks for when it says to avoid relying solely on names. Names are
-accepted as a fallback and rejected when ambiguous.
+spec section 9 asks for when it says to avoid relying solely on names. The
+agent sees and types an 8-character prefix of it (the ``id`` get_sprite_info
+reports), because a full uuid is 36 characters of output on every call. Names
+are accepted as a fallback and rejected when ambiguous.
 """
 
 from __future__ import annotations
@@ -13,23 +15,10 @@ from .base import ToolContext, as_json
 
 # Appended to every tool that takes a layer reference, so the agent learns the
 # addressing rule from whichever tool it reads first.
-_LAYER_ARG = (
-    " The layer argument is either the uuid from list_layers (preferred, stable "
-    "across renames and reordering) or an exact layer name."
-)
+_LAYER_ARG = " Pass layer as an id from get_sprite_info (stable across renames) or an exact name."
 
 
 def register(mcp: MCPServer, ctx: ToolContext) -> None:
-    @mcp.tool(
-        title="List layers",
-        description=(
-            "List every layer with its uuid, name, type, visibility, opacity, stack "
-            "position and whether it is the active layer."
-        ),
-    )
-    async def list_layers() -> str:
-        return as_json(await ctx.bridge.call("layer.list"))
-
     @mcp.tool(
         title="Select layer",
         description=(
@@ -43,7 +32,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         title="Create layer",
         description=(
             "Create a normal image layer above the active one and select it. Returns "
-            "the new layer uuid."
+            "the new layer id."
         ),
     )
     async def create_layer(name: str) -> str:

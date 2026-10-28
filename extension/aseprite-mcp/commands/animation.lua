@@ -12,8 +12,6 @@ for name, value in pairs(DIRECTION_TO_ANIDIR) do
   ANIDIR_TO_DIRECTION[value] = name
 end
 
-local DEFAULT_MAX_PREVIEW_PIXELS = 4000000
-
 return function(deps)
   local proto, doc, render = deps.proto, deps.doc, deps.render
   local fsio = deps.fsio
@@ -71,6 +69,14 @@ return function(deps)
     return proto.array(names)
   end
 
+  --- Columns that bring a contact sheet closest to square.
+  -- One long strip is the worst shape to look at: past the model's maximum
+  -- image width it gets shrunk, which blurs every cell and saves no tokens.
+  local function squareColumns(count, width, height)
+    local columns = math.ceil(math.sqrt(count * height / width))
+    return math.max(1, math.min(count, columns))
+  end
+
   -- ------------------------------------------------------------------ inspection
 
   M["anim.info"] = function(params)
@@ -109,17 +115,13 @@ return function(deps)
     local frames = frameRange(sprite, params.tag)
     local requested = params.scale or 4
 
-    -- Fit the whole sheet, not just one cell, inside the pixel budget.
-    local columns = params.columns or #frames
+    -- Fit the whole sheet, not just one cell, inside the budget.
+    local columns = params.columns or squareColumns(#frames, sprite.width, sprite.height)
     if columns > #frames then columns = #frames end
     local rows = math.ceil(#frames / columns)
-    local maxPixels = params.maxPixels or DEFAULT_MAX_PREVIEW_PIXELS
-    local scale = requested
-    while scale > 1
-      and (columns * sprite.width * scale + columns + 1)
-        * (rows * sprite.height * scale + rows + 1) > maxPixels do
-      scale = scale - 1
-    end
+    local scale = render.fitScale(function(s)
+      return columns * sprite.width * s + columns + 1, rows * sprite.height * s + rows + 1
+    end, requested, params.maxEdge, params.maxPixels)
 
     local sheet, usedColumns, usedRows = render.contactSheet(sprite, frames, scale, columns)
     if type(params.outPath) ~= "string" or params.outPath == "" then
@@ -161,11 +163,9 @@ return function(deps)
     local sprite = doc.activeSprite()
     local frameNumber = doc.resolveFrame(sprite, params.frame)
     local requested = params.scale or 8
-    local maxPixels = params.maxPixels or DEFAULT_MAX_PREVIEW_PIXELS
-    local scale = requested
-    while scale > 1 and (sprite.width * scale) * (sprite.height * scale) > maxPixels do
-      scale = scale - 1
-    end
+    local scale = render.fitScale(function(s)
+      return sprite.width * s, sprite.height * s
+    end, requested, params.maxEdge, params.maxPixels)
 
     local image, hasPrevious, hasNext = render.onionSkin(sprite, frameNumber, scale)
     if type(params.outPath) ~= "string" or params.outPath == "" then
@@ -193,15 +193,6 @@ return function(deps)
   end
 
   -- ------------------------------------------------------------------------ tags
-
-  M["tag.list"] = function()
-    local sprite = doc.activeSprite()
-    local tags = {}
-    for _, tag in ipairs(sprite.tags) do
-      tags[#tags + 1] = describeTag(tag)
-    end
-    return { tags = proto.array(tags), count = #tags }
-  end
 
   M["tag.create"] = function(params)
     local sprite = doc.activeSprite()

@@ -143,7 +143,10 @@ All optional. The defaults work.
 | `ASEPRITE_MCP_TOKEN` | unset | Opt-in shared secret; set the same value in both environments. |
 | `ASEPRITE_MCP_TIMEOUT` | `5` | Seconds to wait for a normal command. |
 | `ASEPRITE_MCP_RENDER_TIMEOUT` | `30` | Seconds to wait for a render. |
-| `ASEPRITE_MCP_MAX_PIXELS` | `20000` | Cap on one `draw_pixels` batch. |
+| `ASEPRITE_MCP_MAX_PIXELS` | `20000` | Cap on one drawing call (`draw_pixels`, `draw_rows`, `draw_rect`). |
+| `ASEPRITE_MCP_PREVIEW_MAX_EDGE` | `768` | Longest side, in pixels, of a canvas, layer or onion-skin preview. An image costs the model about width × height / 750 tokens, so this is the price cap on a preview. |
+| `ASEPRITE_MCP_SHEET_MAX_EDGE` | `1280` | The same cap for contact sheets. |
+| `ASEPRITE_MCP_USAGE_LOG` | unset | Path to a JSONL file. When set, every tool call appends one line with its argument bytes, reply bytes, image sizes and estimated image tokens; see [BENCHMARKS.md](BENCHMARKS.md). |
 | `ASEPRITE_MCP_LOG_LEVEL` | `INFO` | Server log level, written to stderr. |
 | `ASEPRITE_MCP_DEBUG` | unset | Set to `1` in Aseprite's environment to write `%TEMP%/aseprite-mcp-debug.log`. |
 

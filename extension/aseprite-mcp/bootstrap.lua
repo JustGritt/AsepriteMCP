@@ -34,6 +34,7 @@ return function()
     "commands/layers.lua",
     "commands/frames.lua",
     "commands/drawing.lua",
+    "commands/cels.lua",
     "commands/inspection.lua",
     "commands/animation.lua",
     "commands/history.lua",

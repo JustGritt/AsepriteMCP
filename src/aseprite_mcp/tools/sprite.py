@@ -12,9 +12,11 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
         title="Get sprite info",
         description=(
-            "Return size, color mode, frame and layer counts, and the active frame and "
-            "layer of the sprite currently open in Aseprite. Call this before editing "
-            "rather than assuming the document structure."
+            "Describe the open sprite in one call: size, color mode, palette size, the "
+            "active frame and layer, every layer (id, name, and any non-default type, "
+            "visibility, lock, opacity or nesting), every frame's duration in ms "
+            "(frameMs[0] is frame 1) and every tag. Call it once before editing rather "
+            "than assuming the document structure."
         ),
     )
     async def get_sprite_info() -> str:

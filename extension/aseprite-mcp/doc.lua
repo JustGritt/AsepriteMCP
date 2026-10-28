@@ -38,6 +38,31 @@ function M.layerId(layer)
   return nil
 end
 
+--- The id get_sprite_info prints: the first 8 characters of the uuid, or the
+-- whole uuid in the unlikely case another layer shares that prefix. A full
+-- uuid is 36 characters the model has to type back on every layer argument.
+function M.shortId(sprite, layer)
+  local id = M.layerId(layer)
+  if not id then return nil end
+  local short = id:sub(1, 8)
+  for _, entry in ipairs(M.allLayers(sprite)) do
+    local other = M.layerId(entry.layer)
+    if entry.layer ~= layer and other and other:sub(1, 8) == short then return id end
+  end
+  return short
+end
+
+local DIRECTION_NAMES = {
+  [AniDir.FORWARD] = "forward",
+  [AniDir.REVERSE] = "reverse",
+  [AniDir.PING_PONG] = "pingpong",
+  [AniDir.PING_PONG_REVERSE] = "pingpong_reverse",
+}
+
+function M.directionName(aniDir)
+  return DIRECTION_NAMES[aniDir] or tostring(aniDir)
+end
+
 --- Depth-first list of every layer, groups included, outermost first.
 function M.allLayers(sprite)
   local out = {}
@@ -52,7 +77,8 @@ function M.allLayers(sprite)
   return out
 end
 
---- Resolve a layer reference (uuid first, then exact name).
+--- Resolve a layer reference: full uuid, then exact name, then a unique uuid
+--- prefix such as the 8-character ids get_sprite_info prints.
 function M.resolveLayer(sprite, ref)
   if ref == nil then
     local layer = app.layer
@@ -78,8 +104,26 @@ function M.resolveLayer(sprite, ref)
   if #matches > 1 then
     proto.failf(
       proto.ERROR.INVALID_LAYER,
-      "%d layers are named %q. Use the uuid from list_layers instead.", #matches, ref
+      "%d layers are named %q. Use its id from get_sprite_info instead.", #matches, ref
     )
+  end
+
+  -- Six characters is the floor, so a short layer name is never read as an id.
+  if #ref >= 6 then
+    local found
+    for _, entry in ipairs(entries) do
+      local id = M.layerId(entry.layer)
+      if id and id:sub(1, #ref) == ref then
+        if found then
+          proto.failf(
+            proto.ERROR.INVALID_LAYER,
+            "%q is the start of more than one layer id. Use more characters.", ref
+          )
+        end
+        found = entry.layer
+      end
+    end
+    if found then return found end
   end
 
   local names = {}
@@ -135,7 +179,8 @@ end
 -- looks to the agent like the command succeeded and did nothing.
 --
 -- points: array of {x=, y=, value=} in sprite coordinates.
--- Returns the number written and the number skipped for being off-canvas.
+-- Returns the number written, the number skipped for being off-canvas, and the
+-- bounding box of the written pixels as {x, y, width, height} (nil if none).
 function M.writePixels(sprite, layer, frameNumber, points, transparent)
   local cel = layer:cel(frameNumber)
 
@@ -153,6 +198,7 @@ function M.writePixels(sprite, layer, frameNumber, points, transparent)
     end
   end
   if #kept == 0 then return 0, skipped end
+  local changed = proto.array({ minX, minY, maxX - minX + 1, maxY - minY + 1 })
 
   local x0, y0, x1, y1 = minX, minY, maxX, maxY
   if cel then
@@ -178,7 +224,7 @@ function M.writePixels(sprite, layer, frameNumber, points, transparent)
   else
     sprite:newCel(layer, frameNumber, image, Point(x0, y0))
   end
-  return #kept, skipped
+  return #kept, skipped, changed
 end
 
 --- Erase pixels. Unlike writing, this never grows the cel: erasing outside the

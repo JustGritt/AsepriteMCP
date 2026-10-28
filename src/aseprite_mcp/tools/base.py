@@ -32,6 +32,9 @@ class ToolContext:
 
     bridge: AsepriteBridge
     config: Config
+    # The most recent draw_rows legend, so a run of edits in the same colors does
+    # not have to restate it. Memory only: it is gone when the server restarts.
+    last_legend: dict[str, str | int] | None = field(default=None, init=False, repr=False)
     _temp_dir: Path | None = field(default=None, init=False, repr=False)
 
     @property
@@ -51,9 +54,21 @@ class ToolContext:
             self._temp_dir = None
 
 
+def _prune(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _prune(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [_prune(v) for v in value]
+    return value
+
+
 def as_json(payload: Any) -> str:
-    """Render a tool result as JSON the model can parse without ambiguity."""
-    return json.dumps(payload, indent=2, ensure_ascii=False)
+    """Render a tool result as compact JSON.
+
+    No indentation and no nulls: the model reads every byte of every reply, and
+    each reply stays in its context for the rest of the session.
+    """
+    return json.dumps(_prune(payload), separators=(",", ":"), ensure_ascii=False)
 
 
 async def render_to_image(

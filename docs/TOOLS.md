@@ -1,11 +1,12 @@
 # Tool reference
 
-33 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
+35 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
 its place only if it helps the agent understand, modify, inspect or safely
 preserve the sprite.
 
-Every tool returns JSON as text. Preview tools additionally return a PNG image
-block. Failures come back as `CODE: message`, e.g.
+Every tool returns compact JSON as text: no indentation and no `null` fields,
+because the model reads every byte and each reply stays in its context. Preview
+tools also return a PNG image block. Failures come back as `CODE: message`, e.g.
 `INVALID_FRAME: Frame 12 does not exist. This sprite has 6 frame(s), numbered 1-6.`
 
 Conventions:
@@ -13,8 +14,10 @@ Conventions:
 - **Frames are 1-based**, matching the Aseprite timeline.
 - **Durations are milliseconds** everywhere. Aseprite stores seconds; the Lua
   side converts.
-- **Layers** are addressed by the `uuid` from `list_layers` (stable across
-  renames and reordering) or by exact name (rejected when ambiguous).
+- **Layers** are addressed by the 8-character `id` from `get_sprite_info` (a
+  prefix of the layer's uuid, stable across renames and reordering), by any
+  unique uuid prefix of at least 6 characters or the full uuid, or by exact name
+  (rejected when ambiguous).
 - **Colours** are `#RGB`, `#RGBA`, `#RRGGBB` or `#RRGGBBAA`, case-insensitive.
 - Tools taking `layer` / `frame` default to the active layer and frame.
 
@@ -33,8 +36,26 @@ dialog may appear here.
 ## Sprite
 
 ### `get_sprite_info`
-Size, colour mode, frame/layer/tag counts, palette size, active frame and layer.
-Call before editing rather than assuming the document structure.
+The whole document in one call. Call it once before editing rather than assuming
+the structure:
+
+```json
+{"path": "/sprites/knight.aseprite", "width": 32, "height": 32, "colorMode": "rgb",
+ "paletteSize": 16, "activeFrame": 1, "activeLayer": "3f2a9c1e",
+ "layers": [{"id": "3f2a9c1e", "name": "Arm"},
+            {"id": "b71d0a44", "name": "Body", "hidden": true}],
+ "frameMs": [100, 100, 80, 100],
+ "tags": [{"name": "idle", "from": 1, "to": 4, "direction": "pingpong"}]}
+```
+
+- `layers` runs from the top of the stack down. A layer lists `type`, `hidden`,
+  `locked`, `opacity`, `background`, `depth` and `parent` only when they differ
+  from a plain, visible, opaque, top-level image layer.
+- `frameMs[0]` is frame 1.
+- A tag lists `direction` and `repeats` only when they are not `forward` and 0.
+
+This replaces separate layer, frame and tag listings. Each listing was one more
+model turn that re-read the whole context.
 
 ### `open_sprite(path)`
 Opens a file and makes it active. Accepts `.aseprite`, `.ase`, `.png`. Relative
@@ -49,12 +70,9 @@ written, so a layered source can never be flattened to PNG by accident.
 
 ## Layers
 
-### `list_layers`
-Every layer with `uuid`, `name`, `type` (`image`/`group`/`tilemap`), `visible`,
-`opacity`, `depth`, `parent`, and which one is active.
-
 ### `select_layer(layer)` · `create_layer(name)` · `delete_layer(layer)`
-`create_layer` adds a normal image layer above the active one and selects it.
+`create_layer` adds a normal image layer above the active one, selects it and
+returns its `id`.
 `delete_layer` refuses to remove the last top-level layer.
 
 ### `set_layer_visibility(layer, visible)`
@@ -63,9 +81,6 @@ For isolating a component before a preview. Restore it afterwards.
 ---
 
 ## Frames
-
-### `list_frames`
-Index, `durationMs` and covering tags for every frame.
 
 ### `select_frame(frame)`
 
@@ -91,7 +106,34 @@ frame should be equal.
 
 All drawing targets one cel and is one undo step. Pixels outside the current cel
 bounds **grow the cel** rather than being silently clipped; pixels outside the
-canvas are dropped and reported in `skippedOffCanvas`.
+canvas are dropped and reported in `skippedOffCanvas`. Replies include
+`changed: [x, y, width, height]`, the box this call wrote, which you can pass
+straight to `get_canvas_preview(region=...)`.
+
+The model writes tool arguments as output tokens, the most expensive kind, so
+choose the encoding by density. A 32×32 sprite with 540 opaque pixels takes
+18 136 bytes as `draw_pixels` and 1 209 as `draw_rows`.
+
+### `draw_rows(x, y, rows, legend=None, blank="skip", layer=None, frame=None)`
+Pixels as a character map: the same format `get_region` returns, so you can read a
+region, edit the map and write it back. Row 0 lands at `y`, column 0 at `x`.
+
+```json
+{"x": 8, "y": 4, "rows": ["..oo..", ".obbo.", ".obbo.", "..oo.."],
+ "legend": {"o": "#222034", "b": "#5B6EE1"}}
+```
+
+- `legend` maps a character to a hex colour, or to a palette index on an indexed
+  sprite. Omit it to reuse the previous `draw_rows` legend. That legend lives in
+  server memory only, so it is lost on restart, and the reply says
+  `"legend": "reused"`.
+- `.` is transparent. `blank="skip"` (default) leaves those pixels untouched, for
+  overlays. `blank="erase"` clears them in the same undo step, for an exact
+  replacement.
+- ` ` (space) is always skipped, matching `get_region`'s off-canvas marker.
+
+### `draw_rect(x, y, width, height, color, filled=True, layer=None, frame=None)`
+A filled rectangle, or a 1px outline with `filled=false`.
 
 ### `draw_pixels(pixels, color=None, layer=None, frame=None)`
 `pixels` is a list of `{x, y}` with an optional per-pixel `color` or `index`;
@@ -101,10 +143,9 @@ anything without one falls back to the batch-level `color`.
 {"pixels": [{"x": 24, "y": 18}, {"x": 25, "y": 18}], "color": "#E6A15C"}
 ```
 
-Send as many pixels as the edit needs in one call — the spec is explicit that the
-agent must never be forced into one call per pixel. The cap is 20 000 by default
-(`TOO_MANY_PIXELS`). For a solid run prefer `draw_line`; for a region prefer
-`fill`.
+Best for a few scattered pixels. For anything denser use `draw_rows`; for a solid
+run use `draw_line`; for a region use `draw_rect` or `fill`. The cap on any one
+drawing call is 20 000 pixels by default (`TOO_MANY_PIXELS`).
 
 On an indexed sprite, an off-palette colour is snapped to the nearest entry and
 reported in `paletteNotes`, so drifting off-palette is visible rather than silent.
@@ -123,6 +164,32 @@ Never grows the cel: erasing outside it is a no-op by definition, and says so.
 
 ---
 
+## Cels
+
+Most animation frames are an earlier pose moved, mirrored or copied, and most
+palette fixes swap one colour for another. These tools do each in one short call
+instead of a redraw. Each one is one undo step.
+
+### `shift_cel(dx=0, dy=0, layer=None, frame=None)`
+Moves a cel's pixels; positive is right and down. The background layer cannot
+move.
+
+### `flip_cel(direction="horizontal", layer=None, frame=None)`
+Mirrors a cel within the canvas, so a sprite facing right faces left in the same
+place.
+
+### `copy_cel(from_frame, to_frame, from_layer=None, to_layer=None)`
+Copies pixels, position and opacity, replacing whatever was at the destination.
+`to_layer` defaults to `from_layer`, which defaults to the active layer.
+
+### `replace_color(from_color, to_color, tolerance=0, layer=None, frames=None, region=None)`
+Swaps one colour for another on a layer. `frames` is a list of frame numbers or
+`"all"`, defaulting to the active frame. `region=[x, y, width, height]` limits the
+swap. The reply counts the pixels and frames changed and gives their `changed`
+box, so a deterministic recolor needs no preview to trust.
+
+---
+
 ## Inspection
 
 Spec section 2.2 makes visual verification mandatory: a command returning `ok` is
@@ -132,32 +199,47 @@ Previews are scaled **nearest-neighbour** so pixel edges stay hard, and drawn ov
 a checkerboard so a light or dark sprite is never invisible. The response text
 says so; the checkerboard is not artwork.
 
-### `get_canvas_preview(scale=8, frame=None)`
+An image costs the model about width × height / 750 tokens, up to ~4 800 on
+current models, and it stays in context for the rest of the session. So every
+render is capped at `ASEPRITE_MCP_PREVIEW_MAX_EDGE` (768 px) on its long edge,
+or `ASEPRITE_MCP_SHEET_MAX_EDGE` (1280 px) for contact sheets. The scale stays a
+whole number, so a capped render is smaller rather than blurred. Small sprites
+keep the default 8×; a 128×128 sprite drops to 6×. To see detail, zoom with
+`region` instead of raising `scale`.
+
+### `get_canvas_preview(scale=8, frame=None, layer=None, region=None)`
 The composited sprite as a PNG. Defaults to the active frame. Call after every
 substantial edit and actually look at it.
 
-There is no separate `get_frame_preview`; this is it, with `frame`.
+- `layer` renders that layer alone, without touching layer visibility.
+- `region=[x, y, width, height]` renders only that part of the canvas, clamped to
+  it. A drawing call's `changed` box is a ready-made region.
 
-### `get_layer_preview(layer, scale=8, frame=None)`
-One layer alone, without touching layer visibility.
+There is no separate `get_frame_preview` or `get_layer_preview`; this is both,
+with `frame` and `layer`.
 
 ### `get_region(x, y, width, height, frame=None, layer=None)`
-Exact pixels as a character map plus a legend — far more compact than one object
-per pixel, and readable positionally:
+Exact pixels as a character map plus a legend: far more compact than one object
+per pixel, and readable positionally. `draw_rows` writes the same format back.
 
 ```json
-{
-  "rows": ["..aa..", ".aaaa."],
-  "legend": {".": "#00000000", "a": "#e6a15cff"},
-  "distinctColors": 1
-}
+{"frame": 1, "source": "composite", "rows": ["..aa..", ".aaaa."],
+ "legend": {"a": "#e6a15cff"}, "distinctColors": 1}
 ```
 
-`.` is transparent, a space is outside the canvas. Capped at 4096 pixels.
+`.` is transparent and a space is outside the canvas; neither is repeated in the
+legend. Capped at 4096 pixels.
 
 ### `get_palette`
-Index and hex for every palette entry. Read it before drawing so you reuse
-existing colours instead of introducing near-duplicates.
+Every palette entry as a positional list, so `colors[i]` is palette index `i`.
+Alpha appears only when it is not `ff`:
+
+```json
+{"colorMode": "indexed", "transparentIndex": 0, "colors": ["#000000", "#222034", "#5b6ee180"]}
+```
+
+Read it before drawing so you reuse existing colours instead of introducing
+near-duplicates.
 
 ---
 
@@ -168,8 +250,10 @@ Frame range, direction, repeats and per-frame durations for a tag, or the whole
 sprite.
 
 ### `get_animation_contact_sheet(scale=4, tag=None, columns=None)`
-Every frame side by side in one image, each cell labelled with its frame number,
-plus per-cell durations and tags as text. This is how a whole animation is judged:
+Every frame in one near-square grid, each cell labelled with its frame number,
+plus per-cell durations and tags as text. The default `columns` keeps the sheet
+close to square, because a long strip would be shrunk and blurred to fit the
+model's image limit. This is how a whole animation is judged:
 silhouette readability, volume consistency, motion arcs, spacing, pixel jitter.
 
 ### `get_onion_skin_preview(frame=None, scale=8)`
@@ -177,7 +261,7 @@ Previous, current and next frame superimposed — previous tinted red and faint,
 current fully opaque, next tinted blue and faint. For motion arcs, spacing and
 unintended jitter.
 
-### `list_animation_tags` · `create_animation_tag` · `update_animation_tag` · `delete_animation_tag`
+### `create_animation_tag` · `update_animation_tag` · `delete_animation_tag`
 `create_animation_tag(name, from_frame, to_frame, direction="forward", repeats=0)`;
 direction is `forward`, `reverse`, `pingpong` or `pingpong_reverse`, and
 `repeats=0` loops indefinitely. `update_animation_tag` changes only the fields
@@ -198,10 +282,10 @@ confirm.
 ## Suggested workflow
 
 ```
-get_sprite_info -> list_layers -> list_frames -> get_palette   (before editing)
+get_sprite_info -> get_palette                                 (before editing)
         |
         v
-duplicate_frame -> draw_pixels -> get_canvas_preview -> judge -> correct
+duplicate_frame -> draw_rows -> get_canvas_preview(region=changed) -> judge -> correct
         |
         v
 get_animation_contact_sheet + get_onion_skin_preview           (after several frames)
@@ -212,7 +296,7 @@ save_sprite
 
 ## Not implemented
 
-`compare_frames`, `shift_cel`, `copy_cel`, `flip_cel`, `get_used_palette`,
+`compare_frames`, `get_used_palette`,
 `get_animation_bounds`, `get_history_info`, and the `begin_edit` /
 `commit_edit` / `rollback_edit` transaction tools — all spec section 19 and 16
 material, deferred to a later phase. See the end of

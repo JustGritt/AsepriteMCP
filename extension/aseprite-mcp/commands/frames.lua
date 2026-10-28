@@ -13,33 +13,6 @@ return function(deps)
   local proto, doc = deps.proto, deps.doc
   local M = {}
 
-  local function tagsCovering(sprite, frameNumber)
-    local names = {}
-    for _, tag in ipairs(sprite.tags) do
-      if frameNumber >= tag.fromFrame.frameNumber and frameNumber <= tag.toFrame.frameNumber then
-        names[#names + 1] = tag.name
-      end
-    end
-    return proto.array(names)
-  end
-
-  M["frame.list"] = function()
-    local sprite = doc.activeSprite()
-    local frames = {}
-    for i, frame in ipairs(sprite.frames) do
-      frames[#frames + 1] = {
-        index = i,
-        durationMs = doc.msFromSeconds(frame.duration),
-        tags = tagsCovering(sprite, i),
-      }
-    end
-    return {
-      frames = proto.array(frames),
-      count = #frames,
-      activeFrame = app.frame and app.frame.frameNumber or nil,
-    }
-  end
-
   M["frame.select"] = function(params)
     local sprite = doc.activeSprite()
     local frameNumber = doc.resolveFrame(sprite, params.frame)

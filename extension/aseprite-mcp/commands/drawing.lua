@@ -34,36 +34,52 @@ return function(deps)
       proto.fail(proto.ERROR.INVALID_PARAMS, "pixels must be a non-empty array.")
     end
 
+    -- A pixel flagged erase is written as transparent, so draw_rows can clear
+    -- and paint in one transaction. Erasing outside the existing cel is a no-op
+    -- by definition, so those points are dropped rather than growing the cel.
+    local transparent = color.transparentValue(sprite)
+    local before = layer:cel(frameNumber)
+    local bounds = before and before.bounds
+
     local addNote, notes = noteCollector()
-    local points = {}
+    local points, erased = {}, 0
     for i, p in ipairs(pixels) do
       if type(p.x) ~= "number" or type(p.y) ~= "number" then
         proto.failf(proto.ERROR.INVALID_PARAMS, "pixels[%d] needs numeric x and y.", i)
       end
-      local value, note = color.toPixelValue(sprite, p)
-      addNote(note)
-      points[#points + 1] = { x = math.floor(p.x), y = math.floor(p.y), value = value }
+      local x, y = math.floor(p.x), math.floor(p.y)
+      if p.erase then
+        if bounds and x >= bounds.x and y >= bounds.y
+          and x < bounds.x + bounds.width and y < bounds.y + bounds.height
+          and x >= 0 and y >= 0 and x < sprite.width and y < sprite.height then
+          points[#points + 1] = { x = x, y = y, value = transparent }
+          erased = erased + 1
+        end
+      else
+        local value, note = color.toPixelValue(sprite, p)
+        addNote(note)
+        points[#points + 1] = { x = x, y = y, value = value }
+      end
     end
 
-    local written, skipped
-    app.transaction("mcp: draw pixels", function()
-      written, skipped = doc.writePixels(sprite, layer, frameNumber, points,
-        color.transparentValue(sprite))
-    end)
+    local written, skipped, changed = 0, 0, nil
+    if #points > 0 then
+      app.transaction("mcp: draw pixels", function()
+        written, skipped, changed = doc.writePixels(sprite, layer, frameNumber, points,
+          transparent)
+      end)
+    end
 
     local result = {
-      written = written,
+      written = written - erased,
+      erased = erased > 0 and erased or nil,
+      changed = changed,
       layer = layer.name,
       frame = frameNumber,
-      celBounds = nil,
+      note = #points == 0
+        and "Nothing changed: every pixel was an erase outside the existing cel."
+        or nil,
     }
-    local cel = layer:cel(frameNumber)
-    if cel then
-      result.celBounds = {
-        x = cel.bounds.x, y = cel.bounds.y,
-        width = cel.bounds.width, height = cel.bounds.height,
-      }
-    end
     if skipped and skipped > 0 then
       result.skippedOffCanvas = skipped
       result.warning = string.format(
@@ -100,7 +116,6 @@ return function(deps)
     end)
     return {
       erased = erased,
-      requested = #points,
       layer = layer.name,
       frame = frameNumber,
       note = erased == 0
@@ -205,12 +220,13 @@ return function(deps)
       end
     end
 
-    local written
+    local written, _, changed
     app.transaction("mcp: fill", function()
-      written = doc.writePixels(sprite, layer, frameNumber, points, transparent)
+      written, _, changed = doc.writePixels(sprite, layer, frameNumber, points, transparent)
     end)
     return {
       filled = written,
+      changed = changed,
       layer = layer.name,
       frame = frameNumber,
       paletteNote = note,
@@ -245,14 +261,14 @@ return function(deps)
       end
     end
 
-    local written, skipped
+    local written, skipped, changed
     app.transaction("mcp: draw line", function()
-      written, skipped = doc.writePixels(sprite, layer, frameNumber, points,
+      written, skipped, changed = doc.writePixels(sprite, layer, frameNumber, points,
         color.transparentValue(sprite))
     end)
     return {
       written = written,
-      length = #points,
+      changed = changed,
       skippedOffCanvas = (skipped or 0) > 0 and skipped or nil,
       layer = layer.name,
       frame = frameNumber,

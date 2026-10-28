@@ -36,7 +36,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
         title="Get animation contact sheet",
         description=(
-            "Render every frame side by side in one image, with frame numbers drawn in "
+            "Render every frame in one near-square grid, with frame numbers drawn in "
             "each cell, and return the per-frame durations and tags as text. This is how "
             "you judge an animation as a whole: check silhouette readability, volume "
             "consistency, motion arcs, spacing and pixel jitter across frames. Call it "
@@ -51,7 +51,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         check_scale(scale)
         if columns is not None and columns < 1:
             raise BridgeError(ErrorCode.INVALID_PARAMS, f"columns must be >= 1, got {columns}.")
-        params: dict[str, Any] = {"scale": scale}
+        params: dict[str, Any] = {"scale": scale, "maxEdge": ctx.config.sheet_max_edge}
         if tag is not None:
             params["tag"] = tag
         if columns is not None:
@@ -86,7 +86,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         frame: int | None = None, scale: int = 8
     ) -> list[Image | str]:
         check_scale(scale)
-        params: dict[str, Any] = {"scale": scale}
+        params: dict[str, Any] = {"scale": scale, "maxEdge": ctx.config.preview_max_edge}
         if frame is not None:
             params["frame"] = frame
         image, result = await render_to_image(ctx, "render.onionSkin", params)
@@ -97,13 +97,6 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         return [image, f"{describe(result)}. {legend}"]
 
     # ------------------------------------------------------------------------ tags
-
-    @mcp.tool(
-        title="List animation tags",
-        description="List every tag with its name, frame range, direction and repeat count.",
-    )
-    async def list_animation_tags() -> str:
-        return as_json(await ctx.bridge.call("tag.list"))
 
     @mcp.tool(
         title="Create animation tag",

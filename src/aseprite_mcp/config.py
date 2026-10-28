@@ -59,7 +59,16 @@ class Config:
     # Caps that stop a single call from stalling Aseprite or flooding the agent.
     max_pixels_per_call: int = 20000
     max_region_pixels: int = 4096
-    max_preview_pixels: int = 4000000
+
+    # Longest edge of a rendered image, in pixels. An image costs the model about
+    # width*height/750 tokens and stays in its context for the rest of the
+    # session, so these caps are the real price of a preview. Scales stay whole
+    # numbers, so a capped render is smaller rather than blurred.
+    preview_max_edge: int = 768
+    sheet_max_edge: int = 1280
+
+    # Opt-in JSONL log of what every tool call cost; see aseprite_mcp.usage.
+    usage_log: Path | None = None
 
     # Off by default. Token auth means the extension has to learn a secret, and
     # the only channel for that is a file -- which Aseprite gates behind a
@@ -92,6 +101,7 @@ class Config:
             dirs = (_repo_root() / "sprites",)
 
         token = os.environ.get("ASEPRITE_MCP_TOKEN", "").strip()
+        usage_log = os.environ.get("ASEPRITE_MCP_USAGE_LOG", "").strip()
 
         return cls(
             host=host,
@@ -101,6 +111,9 @@ class Config:
             render_timeout=_env_float("ASEPRITE_MCP_RENDER_TIMEOUT", 30.0),
             max_pixels_per_call=_env_int("ASEPRITE_MCP_MAX_PIXELS", 20000),
             max_region_pixels=_env_int("ASEPRITE_MCP_MAX_REGION_PIXELS", 4096),
+            preview_max_edge=_env_int("ASEPRITE_MCP_PREVIEW_MAX_EDGE", 768),
+            sheet_max_edge=_env_int("ASEPRITE_MCP_SHEET_MAX_EDGE", 1280),
+            usage_log=Path(os.path.expanduser(usage_log)).resolve() if usage_log else None,
             require_token=bool(token) or os.environ.get("ASEPRITE_MCP_REQUIRE_TOKEN") == "1",
             token=token,
             log_level=os.environ.get("ASEPRITE_MCP_LOG_LEVEL", "INFO").upper(),

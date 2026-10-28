@@ -20,16 +20,6 @@ MAX_DURATION_MS = 65_535
 
 def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
-        title="List frames",
-        description=(
-            "List every frame with its 1-based index, duration in milliseconds and the "
-            "tags covering it."
-        ),
-    )
-    async def list_frames() -> str:
-        return as_json(await ctx.bridge.call("frame.list"))
-
-    @mcp.tool(
         title="Select frame",
         description="Make a frame the active one, so subsequent drawing lands on it.",
     )

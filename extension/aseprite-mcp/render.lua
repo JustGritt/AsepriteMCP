@@ -29,6 +29,33 @@ local DIGITS = {
 }
 local GLYPH_W, GLYPH_H = 3, 5
 
+-- Hard ceiling on any rendered image, whatever the caller asks for. The budget
+-- that normally applies is maxEdge, which the server sends with every render.
+M.MAX_PREVIEW_PIXELS = 4000000
+
+--- Largest whole-number scale, at most `requested`, whose output fits.
+-- dims(scale) returns the output width and height at that scale. Keeping the
+-- scale whole keeps pixel edges hard; the model's image pipeline would blur a
+-- render it had to shrink, and charge for the pixels it threw away.
+function M.fitScale(dims, requested, maxEdge, maxPixels)
+  maxPixels = maxPixels or M.MAX_PREVIEW_PIXELS
+  local scale = requested
+  while scale > 1 do
+    local w, h = dims(scale)
+    if w * h <= maxPixels and (maxEdge == nil or math.max(w, h) <= maxEdge) then break end
+    scale = scale - 1
+  end
+  return scale, scale ~= requested
+end
+
+--- Copy a rectangle out of an RGB image.
+function M.crop(image, x, y, w, h)
+  local out = Image(w, h, ColorMode.RGB)
+  out:clear(app.pixelColor.rgba(0, 0, 0, 0))
+  out:drawImage(image, Point(-x, -y))
+  return out
+end
+
 function M.fillRect(image, x, y, w, h, value)
   for iy = y, y + h - 1 do
     for ix = x, x + w - 1 do
