@@ -98,7 +98,7 @@ agent gets "retry this" rather than an opaque string.
 
 ## Commands
 
-38 commands back 38 MCP tools. The mapping is not 1:1: `fs.probe` has no tool of
+39 commands back 39 MCP tools. The mapping is not 1:1: `fs.probe` has no tool of
 its own and is called by `get_connection_status`; `draw_rows` and `draw_rect` are
 decoded on the server into `draw.pixels`; and `get_canvas_preview` sends
 `render.layer` when it is given a `layer`.
@@ -106,7 +106,7 @@ decoded on the server into `draw.pixels`; and `get_canvas_preview` sends
 | Command | Tool |
 |---|---|
 | `app.status`, `fs.probe` | `get_connection_status` |
-| `sprite.info`, `sprite.open`, `sprite.save` | sprite tools |
+| `sprite.info`, `sprite.new`, `sprite.open`, `sprite.save` | sprite tools |
 | `layer.select`, `layer.create`, `layer.delete`, `layer.setVisibility` | layer tools |
 | `frame.select`, `frame.create`, `frame.duplicate`, `frame.delete`, `frame.setDuration` | frame tools |
 | `draw.pixels`, `draw.erase`, `draw.clearCel`, `draw.fill`, `draw.line` | drawing tools |

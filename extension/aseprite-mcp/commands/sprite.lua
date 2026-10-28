@@ -20,8 +20,8 @@ return function(deps)
   -- This replaces separate layer, frame and tag listings: each listing was one
   -- more model turn re-reading the whole context. Fields at their usual value
   -- (visible, opaque, forward, looping) are left out rather than repeated.
-  M["sprite.info"] = function()
-    local sprite = doc.activeSprite()
+  -- sprite.open and sprite.new return it too, so no read has to follow them.
+  local function overview(sprite)
     local active = app.layer
 
     local layers = {}
@@ -69,6 +69,37 @@ return function(deps)
     }
   end
 
+  M["sprite.info"] = function()
+    return overview(doc.activeSprite())
+  end
+
+  local COLOR_MODES = { rgb = ColorMode.RGB, grayscale = ColorMode.GRAY, indexed = ColorMode.INDEXED }
+
+  M["sprite.new"] = function(params)
+    local width, height = params.width, params.height
+    if type(width) ~= "number" or type(height) ~= "number" or width < 1 or height < 1 then
+      proto.fail(proto.ERROR.INVALID_PARAMS, "width and height must be positive whole numbers.")
+    end
+    local mode = COLOR_MODES[params.colorMode or "rgb"]
+    if not mode then
+      proto.failf(proto.ERROR.INVALID_PARAMS,
+        "colorMode must be rgb, grayscale or indexed, got %q.", tostring(params.colorMode))
+    end
+
+    local sprite = Sprite(math.floor(width), math.floor(height), mode)
+    pcall(function() app.sprite = sprite end)
+    if params.path then
+      if not fsio.saveSprite(sprite, params.path) then
+        proto.failf(
+          proto.ERROR.LUA_ERROR,
+          "Created the sprite but could not write %s. Check that scripts have "
+            .. "file-system access; see docs/SETUP.md.", params.path
+        )
+      end
+    end
+    return overview(sprite)
+  end
+
   M["sprite.open"] = function(params)
     local path = params.path
     if type(path) ~= "string" or path == "" then
@@ -88,16 +119,7 @@ return function(deps)
     -- app.open usually activates the document already; make it explicit so the
     -- next command cannot land on whatever was previously in front.
     pcall(function() app.sprite = sprite end)
-
-    return {
-      filename = app.fs.fileName(sprite.filename),
-      path = sprite.filename,
-      width = sprite.width,
-      height = sprite.height,
-      colorMode = doc.colorModeName(sprite.colorMode),
-      frameCount = #sprite.frames,
-      layerCount = #doc.allLayers(sprite),
-    }
+    return overview(sprite)
   end
 
   M["sprite.save"] = function(params)

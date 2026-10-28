@@ -64,7 +64,9 @@ end
 local function substituteEmptyArrays(text)
   -- json.encode has no notion of an empty array, so we encode a placeholder and
   -- rewrite it afterwards. The placeholder is deliberately unlikely to collide.
-  return (text:gsub('{"__emptyArray":true}', "[]"))
+  -- Aseprite's encoder writes it as {"__emptyArray": true}, with a space, so
+  -- match any whitespace rather than one exact spelling.
+  return (text:gsub('{%s*"__emptyArray"%s*:%s*true%s*}', "[]"))
 end
 
 local function prepare(value)

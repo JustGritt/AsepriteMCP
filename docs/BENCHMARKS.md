@@ -49,9 +49,9 @@ Also note the session total from `/cost` in Claude Code.
 
 ## Benchmark set
 
-Run each prompt in a fresh Claude Code session on a blank sprite of the given
-size. Use the same model for every run, and record `/cost` plus the usage-log
-totals, before and after the change.
+Run each prompt in a fresh Claude Code session. Start each one on a blank sprite
+of the given size, made with `new_sprite`. Use the same model for every run, and
+record `/cost` plus the usage-log totals, before and after the change.
 
 | # | Canvas | Prompt |
 |---|---|---|

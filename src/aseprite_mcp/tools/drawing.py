@@ -67,6 +67,21 @@ def _resolve_legend(legend: dict[str, str | int]) -> dict[str, dict[str, Any]]:
     return resolved
 
 
+def _uneven_rows(rows: list[str]) -> str | None:
+    """Describe rows of different lengths, which in erase mode is almost always a
+    miscounted row: the edge of the shape lands a column off without any error."""
+    by_length: dict[int, list[int]] = {}
+    for index, row in enumerate(rows):
+        by_length.setdefault(len(row), []).append(index)
+    if len(by_length) < 2:
+        return None
+    parts = []
+    for length, indexes in sorted(by_length.items(), key=lambda kv: len(kv[1])):
+        shown = ", ".join(map(str, indexes[:6])) + (", ..." if len(indexes) > 6 else "")
+        parts.append(f"{length} wide (rows {shown})")
+    return "Rows differ in length: " + "; ".join(parts) + ". Check for a miscounted row."
+
+
 def _target(layer: str | None, frame: int | None) -> dict[str, Any]:
     """The layer/frame selector shared by every drawing command."""
     target: dict[str, Any] = {}
@@ -186,6 +201,9 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         result = await ctx.call("draw.pixels", params, timeout=ctx.config.render_timeout)
         if reused:
             result["legend"] = "reused"
+        uneven = _uneven_rows(rows) if blank == "erase" else None
+        if uneven:
+            result["warning"] = " ".join(filter(None, (result.get("warning"), uneven)))
         return as_json(result)
 
     @mcp.tool(
