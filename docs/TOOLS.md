@@ -1,6 +1,6 @@
 # Tool reference
 
-35 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
+38 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
 its place only if it helps the agent understand, modify, inspect or safely
 preserve the sprite.
 
@@ -249,6 +249,18 @@ near-duplicates.
 Frame range, direction, repeats and per-frame durations for a tag, or the whole
 sprite.
 
+### `compare_frames(a, b, layer=None, diff_map=False)`
+What differs between two frames, as text: pixels that `appeared`, `vanished` or
+were `recolored`, the `changed` box, and each frame's opaque bounds. With
+`diff_map`, a map of the changed box (`+` appeared, `-` vanished, `*` recolored,
+`.` same) as long as it fits the `get_region` cap. Use it to check a targeted edit
+touched nothing else, or that a loop's last frame matches its first, for a few
+dozen tokens instead of an onion skin.
+
+### `get_animation_bounds(tag=None, layer=None)`
+The opaque bounding box of every frame plus their union. Positional drift, a
+character slowly sliding across an idle loop, shows up as numbers.
+
 ### `get_animation_contact_sheet(scale=4, tag=None, columns=None)`
 Every frame in one near-square grid, each cell labelled with its frame number,
 plus per-cell durations and tags as text. The default `columns` keeps the sheet
@@ -269,11 +281,41 @@ you pass.
 
 ---
 
+## Batch
+
+### `batch(ops, preview=False)`
+Runs several editing tools in one call, as one undo step:
+
+```json
+{"ops": [
+  {"tool": "duplicate_frame", "args": {"frame": 1}},
+  {"tool": "shift_cel", "args": {"dy": -1, "frame": 2}},
+  {"tool": "draw_rows", "args": {"x": 12, "y": 9, "rows": ["oo"], "frame": 2}}],
+ "preview": true}
+```
+
+Every tool call is a model turn that re-reads the whole context, so building a
+frame used to cost one turn per step; a batch is one turn.
+
+- Ops run in order, so a later op can target the frame an earlier op created.
+  `duplicate_frame(n)` always lands at `n + 1`.
+- Each op is validated by its own tool before anything is sent. A bad op names
+  its index (`ops[1] (draw_rows): ...`) and nothing reaches Aseprite.
+- **All or nothing.** If an op fails inside Aseprite, every op is rolled back,
+  and the error names the op that failed.
+- `preview=true` appends a canvas preview of the last frame an op reported.
+- Batchable tools: the drawing, cel and frame tools, `select_layer`,
+  `create_layer`, `set_layer_visibility` and the tag tools. Previews, file
+  access, `undo`/`redo` and `delete_layer` must be called directly.
+
+---
+
 ## History
 
 ### `undo` · `redo`
 Native document history. Because every mutating command is exactly one
-`app.transaction`, **one `undo` reverses exactly one tool call**. Aseprite does
+`app.transaction`, **one `undo` reverses exactly one tool call**, and a whole
+`batch` counts as one call. Aseprite does
 not report whether anything was actually on the stack, so preview afterwards to
 confirm.
 
@@ -282,22 +324,29 @@ confirm.
 ## Suggested workflow
 
 ```
-get_sprite_info -> get_palette                                 (before editing)
+get_sprite_info, get_palette                        (once, before editing)
         |
         v
-duplicate_frame -> draw_rows -> get_canvas_preview(region=changed) -> judge -> correct
+batch([duplicate_frame, shift_cel / flip_cel / copy_cel, draw_rows], preview=true)
+        |                                           (one call per step)
+        v
+judge -> correct: get_region / compare_frames for exact facts,
+                  get_canvas_preview(region=changed) for detail
         |
         v
-get_animation_contact_sheet + get_onion_skin_preview           (after several frames)
-        |
-        v
+get_animation_bounds + get_animation_contact_sheet  (once per animation pass;
+        |                                            onion skin only for a
+        v                                            specific motion question)
 save_sprite
 ```
 
+The server sends the same guidance as its `INSTRUCTIONS`. Every call re-reads
+the whole conversation and every image stays in it, so fewer, denser calls and
+text checks before images are what keep a session cheap.
+
 ## Not implemented
 
-`compare_frames`, `get_used_palette`,
-`get_animation_bounds`, `get_history_info`, and the `begin_edit` /
+`get_used_palette`, `get_history_info`, and the `begin_edit` /
 `commit_edit` / `rollback_edit` transaction tools — all spec section 19 and 16
 material, deferred to a later phase. See the end of
 [ARCHITECTURE.md](ARCHITECTURE.md) for why edit transactions in particular are

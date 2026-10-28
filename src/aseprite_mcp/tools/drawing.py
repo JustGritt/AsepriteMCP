@@ -28,23 +28,13 @@ from .base import ToolContext, as_json
 
 
 class PixelSpec(BaseModel):
-    """One pixel to write."""
-
-    x: int = Field(description="Column, 0-based, measured from the left of the sprite.")
-    y: int = Field(description="Row, 0-based, measured from the top of the sprite.")
-    color: str | None = Field(
-        default=None,
-        description=(
-            "Hex color such as #E6A15C or #E6A15CFF. Omit to use the color argument "
-            "shared by the whole batch."
-        ),
-    )
+    # Field descriptions go to the model with every request, so they say only
+    # what the names do not.
+    x: int
+    y: int
+    color: str | None = Field(default=None, description="Hex; omit for the batch color.")
     index: int | None = Field(
-        default=None,
-        description=(
-            "Palette index, for indexed sprites only. Takes precedence over color and "
-            "guarantees an exact palette match rather than a nearest-color snap."
-        ),
+        default=None, description="Palette index on indexed sprites: an exact match."
     )
 
 
@@ -102,10 +92,8 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
         title="Draw pixels",
         description=(
-            "Write a batch of individual pixels to one cel. Best for a few scattered "
-            "pixels: for anything denser use draw_rows, which costs a fraction of the "
-            "tokens, and for runs and regions use draw_line, draw_rect or fill. Drawing "
-            "outside the current cel bounds expands the cel rather than clipping."
+            "Write a few scattered pixels, each {x, y} with an optional color or palette "
+            "index, else the batch color. For anything denser use draw_rows."
         ),
     )
     async def draw_pixels(
@@ -137,18 +125,15 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             )
 
         params = {"pixels": encoded, **_target(layer, frame)}
-        return as_json(await ctx.bridge.call("draw.pixels", params, timeout=ctx.config.render_timeout))
+        return as_json(await ctx.call("draw.pixels", params, timeout=ctx.config.render_timeout))
 
     @mcp.tool(
         title="Draw rows",
         description=(
-            "Write pixels as a character map, the same rows-and-legend format get_region "
-            "returns, so you can read a region, edit it and write it back. Row 0 lands at "
-            "y and column 0 at x. legend maps each character to a hex color, or to a "
-            "palette index on indexed sprites; omit it to reuse the previous draw_rows "
-            "legend. '.' is transparent: blank='skip' leaves those pixels as they are, "
-            "blank='erase' clears them. ' ' is always skipped. Use this for any shape "
-            "denser than a few pixels; it costs a fraction of draw_pixels."
+            "Write pixels as rows of characters, the format get_region returns. Row 0 lands "
+            "at y, column 0 at x. legend maps each character to a hex color or palette "
+            "index; omit it to reuse the last one. '.' is transparent: blank='skip' leaves "
+            "it, blank='erase' clears it. ' ' is always skipped."
         ),
     )
     async def draw_rows(
@@ -198,7 +183,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         ctx.last_legend = legend
 
         params = {"pixels": encoded, **_target(layer, frame)}
-        result = await ctx.bridge.call("draw.pixels", params, timeout=ctx.config.render_timeout)
+        result = await ctx.call("draw.pixels", params, timeout=ctx.config.render_timeout)
         if reused:
             result["legend"] = "reused"
         return as_json(result)
@@ -206,8 +191,8 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
         title="Draw rectangle",
         description=(
-            "Draw a rectangle with its top-left corner at x, y: filled by default, or a "
-            "1px outline with filled=false."
+            "Fill a rectangle with its top-left corner at x, y, or outline it with "
+            "filled=false."
         ),
     )
     async def draw_rect(
@@ -235,14 +220,11 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         ]
         _check_batch(len(points))
         params = {"pixels": points, **_target(layer, frame)}
-        return as_json(await ctx.bridge.call("draw.pixels", params, timeout=ctx.config.render_timeout))
+        return as_json(await ctx.call("draw.pixels", params, timeout=ctx.config.render_timeout))
 
     @mcp.tool(
         title="Erase pixels",
-        description=(
-            "Make a batch of pixels fully transparent in one cel. Equivalent to drawing "
-            "a transparent color, but clearer about intent."
-        ),
+        description="Make a list of {x, y} pixels transparent on one cel.",
     )
     async def erase_pixels(
         pixels: list[PointSpec],
@@ -254,20 +236,20 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             "pixels": [{"x": p.x, "y": p.y} for p in pixels],
             **_target(layer, frame),
         }
-        return as_json(await ctx.bridge.call("draw.erase", params, timeout=ctx.config.render_timeout))
+        return as_json(await ctx.call("draw.erase", params, timeout=ctx.config.render_timeout))
 
     @mcp.tool(
         title="Clear cel",
-        description="Erase the entire contents of one cel, leaving the frame empty on that layer.",
+        description="Erase a whole cel, leaving that layer empty in that frame.",
     )
     async def clear_cel(layer: str | None = None, frame: int | None = None) -> str:
-        return as_json(await ctx.bridge.call("draw.clearCel", _target(layer, frame)))
+        return as_json(await ctx.call("draw.clearCel", _target(layer, frame)))
 
     @mcp.tool(
         title="Flood fill",
         description=(
-            "Flood-fill the connected region of matching color that contains the given "
-            "point. Tolerance is 0-255 and defaults to an exact color match."
+            "Flood-fill the 4-connected region containing x, y. tolerance is 0-255 per RGBA "
+            "channel."
         ),
     )
     async def fill(
@@ -289,14 +271,11 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             "tolerance": tolerance,
             **_target(layer, frame),
         }
-        return as_json(await ctx.bridge.call("draw.fill", params, timeout=ctx.config.render_timeout))
+        return as_json(await ctx.call("draw.fill", params, timeout=ctx.config.render_timeout))
 
     @mcp.tool(
         title="Draw line",
-        description=(
-            "Draw a 1px Bresenham line between two points. Much cheaper than "
-            "enumerating the same pixels through draw_pixels."
-        ),
+        description="Draw a 1px line between two points, in a single color.",
     )
     async def draw_line(
         x1: int,
@@ -315,4 +294,4 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             "color": normalize_color(color),
             **_target(layer, frame),
         }
-        return as_json(await ctx.bridge.call("draw.line", params, timeout=ctx.config.render_timeout))
+        return as_json(await ctx.call("draw.line", params, timeout=ctx.config.render_timeout))

@@ -22,8 +22,8 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
         title="Shift cel",
         description=(
-            "Move one cel's pixels by dx, dy without redrawing them; positive is right "
-            "and down. The cheap way to make a bob, a step or a nudge."
+            "Move a cel's pixels by dx, dy (positive is right and down) without redrawing "
+            "them, e.g. for a bob."
         ),
     )
     async def shift_cel(
@@ -32,14 +32,11 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         if dx == 0 and dy == 0:
             raise BridgeError(ErrorCode.INVALID_PARAMS, "dx and dy are both 0: nothing to move.")
         params = {"dx": dx, "dy": dy, **_target(layer, frame)}
-        return as_json(await ctx.bridge.call("cel.shift", params))
+        return as_json(await ctx.call("cel.shift", params))
 
     @mcp.tool(
         title="Flip cel",
-        description=(
-            "Mirror one cel horizontally or vertically within the canvas, so a sprite "
-            "facing right faces left in the same place."
-        ),
+        description="Mirror a cel horizontally or vertically within the canvas, keeping its place.",
     )
     async def flip_cel(
         direction: Literal["horizontal", "vertical"] = "horizontal",
@@ -47,14 +44,13 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         frame: int | None = None,
     ) -> str:
         params = {"direction": direction, **_target(layer, frame)}
-        return as_json(await ctx.bridge.call("cel.flip", params))
+        return as_json(await ctx.call("cel.flip", params))
 
     @mcp.tool(
         title="Copy cel",
         description=(
-            "Copy one cel's pixels and position to another frame, and optionally another "
-            "layer, replacing whatever was there. to_layer defaults to from_layer, "
-            "which defaults to the active layer."
+            "Copy a cel to another frame, and optionally another layer, replacing what is "
+            "there."
         ),
     )
     async def copy_cel(
@@ -68,15 +64,13 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             params["fromLayer"] = from_layer
         if to_layer is not None:
             params["toLayer"] = to_layer
-        return as_json(await ctx.bridge.call("cel.copy", params))
+        return as_json(await ctx.call("cel.copy", params))
 
     @mcp.tool(
         title="Replace color",
         description=(
-            "Swap one color for another on a layer, without redrawing. frames is a list "
-            "of frame numbers or 'all' (default: the active frame). Optional tolerance "
-            "0-255 per RGBA channel and region=[x, y, width, height]. Needs no preview "
-            "to trust: the reply counts what changed."
+            "Swap one color for another on a layer. frames is a list or 'all' (default: "
+            "active frame). Optional tolerance 0-255 and region [x, y, width, height]."
         ),
     )
     async def replace_color(
@@ -106,5 +100,5 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         if area is not None:
             params["region"] = area
         return as_json(
-            await ctx.bridge.call("cel.replaceColor", params, timeout=ctx.config.render_timeout)
+            await ctx.call("cel.replaceColor", params, timeout=ctx.config.render_timeout)
         )

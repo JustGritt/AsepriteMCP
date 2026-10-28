@@ -13,51 +13,40 @@ from mcp.server.mcpserver import MCPServer
 
 from .base import ToolContext, as_json
 
-# Appended to every tool that takes a layer reference, so the agent learns the
-# addressing rule from whichever tool it reads first.
-_LAYER_ARG = " Pass layer as an id from get_sprite_info (stable across renames) or an exact name."
-
 
 def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
         title="Select layer",
-        description=(
-            "Make a layer the active one, so subsequent drawing lands on it." + _LAYER_ARG
-        ),
+        description="Make a layer the active one, so tools that omit layer target it.",
     )
     async def select_layer(layer: str) -> str:
-        return as_json(await ctx.bridge.call("layer.select", {"layer": layer}))
+        return as_json(await ctx.call("layer.select", {"layer": layer}))
 
     @mcp.tool(
         title="Create layer",
-        description=(
-            "Create a normal image layer above the active one and select it. Returns "
-            "the new layer id."
-        ),
+        description="Add an image layer above the active one, select it and return its id.",
     )
     async def create_layer(name: str) -> str:
-        return as_json(await ctx.bridge.call("layer.create", {"name": name}))
+        return as_json(await ctx.call("layer.create", {"name": name}))
 
     @mcp.tool(
         title="Delete layer",
         description=(
-            "Delete a layer and all of its cels. Undoable with the undo tool, but "
-            "confirm with the user first if the layer holds work you did not create."
-            + _LAYER_ARG
+            "Delete a layer and its cels (undoable). Ask the user first if it holds work "
+            "you did not create."
         ),
     )
     async def delete_layer(layer: str) -> str:
-        return as_json(await ctx.bridge.call("layer.delete", {"layer": layer}))
+        return as_json(await ctx.call("layer.delete", {"layer": layer}))
 
     @mcp.tool(
         title="Set layer visibility",
         description=(
-            "Show or hide a layer. Useful for isolating a component before rendering a "
-            "preview, but remember to restore visibility afterwards."
-            + _LAYER_ARG
+            "Show or hide a layer, e.g. to isolate one before a preview. Restore it "
+            "afterwards."
         ),
     )
     async def set_layer_visibility(layer: str, visible: bool) -> str:
         return as_json(
-            await ctx.bridge.call("layer.setVisibility", {"layer": layer, "visible": visible})
+            await ctx.call("layer.setVisibility", {"layer": layer, "visible": visible})
         )

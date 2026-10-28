@@ -120,6 +120,15 @@ calling `.lua` file and the specific path it wants**. Two consequences:
 Because each command is exactly one transaction, **one `undo` reverses exactly
 one tool call**. That is what makes it safe for an agent to experiment.
 
+`batch` keeps the rule. The server runs each op's own tool with a context
+variable set (`tools/base.py` `_recording`), so arguments are validated and
+encoded exactly as in a direct call, but `ctx.call` records the command instead
+of sending it. The recorded commands go to Lua as one `batch.run`, which
+dispatches them inside a single `app.transaction`. Aseprite merges nested
+transactions into the outer one, so a whole batch is one undo step. An error
+inside the transaction rolls every op back, so a batch is all or nothing.
+Verified against 1.3.18 in `tests/lua/run_tests.lua`.
+
 `BridgeError` subclasses the SDK's `ToolError` deliberately: the SDK only
 forwards a `ToolError`'s message to the model and reports everything else as a
 bare "Error executing tool", which would hide the error code and the remedy from

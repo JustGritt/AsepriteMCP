@@ -13,6 +13,7 @@ import logging
 import shutil
 import tempfile
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,13 @@ from ..bridge.ws_server import AsepriteBridge
 from ..config import Config
 
 log = logging.getLogger(__name__)
+
+
+# Set by the batch tool while it collects commands: each tool then validates and
+# encodes its arguments as usual, but its command is recorded instead of sent.
+_recording: ContextVar[list[tuple[str, dict[str, Any]]] | None] = ContextVar(
+    "aseprite_mcp_recording", default=None
+)
 
 
 @dataclass
@@ -47,6 +55,16 @@ class ToolContext:
         if self._temp_dir is None:
             self._temp_dir = Path(tempfile.mkdtemp(prefix="aseprite-mcp-"))
         return self._temp_dir
+
+    async def call(
+        self, command: str, params: dict[str, Any] | None = None, timeout: float | None = None
+    ) -> dict[str, Any]:
+        """Send one command to Aseprite, or record it when a batch is collecting."""
+        recording = _recording.get()
+        if recording is not None:
+            recording.append((command, dict(params or {})))
+            return {}
+        return await self.bridge.call(command, params, timeout=timeout)
 
     def cleanup(self) -> None:
         if self._temp_dir is not None:
@@ -88,7 +106,7 @@ async def render_to_image(
     request["outPath"] = str(out_path)
 
     try:
-        result = await ctx.bridge.call(command, request, timeout=ctx.config.render_timeout)
+        result = await ctx.call(command, request, timeout=ctx.config.render_timeout)
         if not out_path.is_file():
             raise BridgeError(
                 ErrorCode.LUA_ERROR,

@@ -495,6 +495,52 @@ test("cel.replaceColor recolors across frames in one step", function()
   sprite:close()
 end)
 
+print("=== batch ===")
+test("batch.run applies several commands as one undo step", function()
+  local sprite = newSprite(8, 8)
+  call("draw.clearCel", {})
+  call("draw.pixels", { pixels = { { x = 2, y = 2, color = "#ff0000ff" } } })
+  local reply = call("batch.run", { ops = {
+    { command = "frame.duplicate", params = { frame = 1 } },
+    { command = "cel.shift", params = { dy = -1, frame = 2 } },
+    { command = "draw.pixels", params = { frame = 2, pixels = { { x = 5, y = 5, color = "#00ff00ff" } } } },
+  } })
+  equals(reply.applied, 3, "three ops applied")
+  equals(reply.results[1].frame, 2, "per-op results come back in order")
+  equals(#sprite.frames, 2, "frame duplicated")
+  equals(sprite.layers[1]:cel(2).position.y, 1, "copy shifted up")
+
+  call("history.undo", {})
+  equals(#sprite.frames, 1, "one undo reverses the whole batch")
+  sprite:close()
+end)
+
+test("batch.run is all or nothing", function()
+  local sprite = newSprite(8, 8)
+  expectError("batch.run", { ops = {
+    { command = "frame.create", params = {} },
+    { command = "frame.setDuration", params = { frame = 9, durationMs = 80 } },
+  } }, "INVALID_FRAME", "the failing op's code is reported")
+  equals(#sprite.frames, 1, "the frame created before the failure was rolled back")
+  local ok, err = pcall(dispatch["batch.run"], { ops = {
+    { command = "frame.create", params = {} },
+    { command = "draw.pixels", params = { pixels = {} } },
+  } })
+  check(not ok and err.message:find("ops%[1%] %(draw.pixels%)") ~= nil, "message names the op")
+  check(err.message:find("rolled back") ~= nil, "and says nothing changed")
+  sprite:close()
+end)
+
+test("batch.run refuses commands that cannot nest", function()
+  local sprite = newSprite(8, 8)
+  for _, command in ipairs({ "history.undo", "render.canvas", "sprite.save", "batch.run", "nope" }) do
+    expectError("batch.run", { ops = { { command = command, params = {} } } },
+      "INVALID_PARAMS", command .. " is not batchable")
+  end
+  expectError("batch.run", { ops = {} }, "INVALID_PARAMS", "empty batch")
+  sprite:close()
+end)
+
 print("=== indexed color ===")
 test("indexed sprites snap to the palette", function()
   local sprite = newSprite(8, 8, ColorMode.INDEXED)
@@ -695,6 +741,44 @@ test("render.onionSkin reports neighbours", function()
 
   local first = call("render.onionSkin", { frame = 1, scale = 2, outPath = tempPath("onion1.png") })
   equals(first.hasPrevious, false, "first frame has no previous")
+  sprite:close()
+end)
+
+print("=== frame comparison ===")
+test("anim.compare reports what moved, as numbers", function()
+  local sprite = newSprite(8, 8)
+  call("draw.clearCel", {})
+  call("draw.pixels", { pixels = {
+    { x = 2, y = 2, color = "#ff0000ff" }, { x = 3, y = 2, color = "#ff0000ff" },
+  } })
+  call("frame.duplicate", { frame = 1 })
+  local same = call("anim.compare", { a = 1, b = 2 })
+  equals(same.changedPixels, 0, "a duplicate is identical")
+  equals(same.changed, nil, "no changed box")
+
+  call("cel.shift", { dx = 1, frame = 2 })
+  call("draw.pixels", { frame = 2, pixels = { { x = 3, y = 2, color = "#00ff00ff" } } })
+  local diff = call("anim.compare", { a = 1, b = 2, diffMap = true })
+  equals(diff.appeared, 1, "the pixel shifted onto empty space appeared")
+  equals(diff.vanished, 1, "the pixel it left vanished")
+  equals(diff.recolored, 1, "one pixel changed color")
+  equals(diff.diff[1], "-*+", "diff map marks each kind")
+  equals(diff.boundsB[1], 3, "frame b's bounds moved right")
+  sprite:close()
+end)
+
+test("anim.bounds exposes drift across frames", function()
+  local sprite = newSprite(8, 8)
+  call("draw.clearCel", {})
+  call("draw.pixels", { pixels = { { x = 2, y = 2, color = "#ffffffff" } } })
+  call("frame.duplicate", { frame = 1 })
+  call("cel.shift", { dy = 1, frame = 2 })
+  call("frame.create", {})
+  local result = call("anim.bounds", {})
+  equals(result.frames[1].bounds[2], 2, "frame 1 at y=2")
+  equals(result.frames[2].bounds[2], 3, "frame 2 drifted to y=3")
+  equals(result.frames[3].empty, true, "empty frame flagged")
+  equals(result.union[4], 2, "union spans both positions")
   sprite:close()
 end)
 

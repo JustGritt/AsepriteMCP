@@ -13,6 +13,7 @@ from .bridge.ws_server import AsepriteBridge
 from .config import Config
 from .tools import (
     animation,
+    batch,
     cels,
     connection,
     drawing,
@@ -22,7 +23,7 @@ from .tools import (
     layers,
     sprite,
 )
-from .tools.base import ToolContext
+from .tools.base import ToolContext, _recording
 from .usage import UsageLog
 
 log = logging.getLogger(__name__)
@@ -33,26 +34,64 @@ log = logging.getLogger(__name__)
 INSTRUCTIONS = """\
 Drive a live Aseprite session to create and edit pixel-art sprites and animations.
 
-Work in a loop: EDIT -> PREVIEW -> ANALYZE -> CORRECT. A command returning ok is
-not evidence that the result looks right; only looking at a preview is.
+Work in a loop: EDIT -> CHECK -> CORRECT. A command returning ok is not evidence
+that the result looks right; checking it is. Every call re-reads the whole
+conversation and every image stays in it, so get there in few calls:
 
-Before editing, call get_sprite_info once rather than assuming the document's
-structure: it returns the layers, frame durations and tags. Read get_palette when
-choosing colors.
+- Start with one get_sprite_info: it has the layers, frame durations and tags.
+  Read get_palette when choosing colors. Layer arguments take the 8-character id
+  from get_sprite_info or an exact name; an omitted layer or frame means the
+  active one.
+- Draw shapes with draw_rows (the format get_region returns), runs with
+  draw_line, blocks with draw_rect or fill. Keep draw_pixels for a few scattered
+  pixels.
+- Build frames from earlier ones: duplicate_frame, then shift_cel, flip_cel,
+  copy_cel or replace_color, and redraw only what changed.
+- Group the edits for one step into a single batch, with preview=true when you
+  need to see the result. A batch is one undo step.
+- Check exact facts with text: get_region for pixels, compare_frames for what
+  changed, get_animation_bounds for drift. Use images for judgement: one
+  get_canvas_preview per batch of edits, zoomed with region (a draw reply's
+  changed box) for details; one get_animation_contact_sheet per animation pass;
+  get_onion_skin_preview only for a specific motion question.
+- Deterministic edits such as replace_color report what they changed and need no
+  preview.
 
-After a substantial edit, call get_canvas_preview and actually look at it; pass a
-draw call's changed box as region to zoom into just that area. After
-changing several animation frames, call get_animation_contact_sheet and
-get_onion_skin_preview to judge motion arcs, spacing, volume consistency and
-pixel jitter across frames.
-
-Prefer duplicate_frame followed by a targeted change over redrawing a pose from
-scratch. Write shapes with draw_rows (the character-map format get_region reads
-back) rather than draw_pixels: it costs a fraction of the tokens.
-Reuse existing palette colors instead of introducing near-duplicates.
-
-Each tool call is one native undo step, so undo reverses exactly one call.
+Reuse existing palette colors instead of introducing near-duplicates. Each call,
+or each whole batch, is one undo step.
 """
+
+
+_NULL = {"type": "null"}
+
+
+def slim_schema(schema: Any) -> Any:
+    """Drop what a JSON schema spends on Pydantic boilerplate rather than meaning.
+
+    Every property carries a generated "title", and every optional argument is
+    spelled anyOf [{type}, {"type": "null"}] with a null default. Tool schemas go
+    to the model with every request, and the two account for a large share of
+    them. An optional argument is already marked by its absence from "required".
+    Arguments are still validated against the full Pydantic model on the server.
+    """
+    if isinstance(schema, list):
+        return [slim_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out = {
+        key: slim_schema(value)
+        for key, value in schema.items()
+        # Only a string title is boilerplate; a property named "title" is a dict.
+        if not (key == "title" and isinstance(value, str))
+    }
+    any_of = out.get("anyOf")
+    if isinstance(any_of, list) and _NULL in any_of:
+        rest = [s for s in any_of if s != _NULL]
+        del out["anyOf"]
+        out = {**rest[0], **out} if len(rest) == 1 else {"anyOf": rest, **out}
+        if "default" in out and out["default"] is None:
+            del out["default"]
+    return out
 
 
 class AsepriteServer(MCPServer):
@@ -68,8 +107,15 @@ class AsepriteServer(MCPServer):
         # structuredContent {"result": "<the same JSON, escaped>"}.
         return super().tool(*args, structured_output=structured_output, **kwargs)
 
+    async def list_tools(self):
+        return [
+            tool.model_copy(update={"input_schema": slim_schema(tool.input_schema)})
+            for tool in await super().list_tools()
+        ]
+
     async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None):
-        if self._usage_log is None:
+        # Ops a batch is collecting are part of the batch's own entry.
+        if self._usage_log is None or _recording.get() is not None:
             return await super().call_tool(name, arguments, context)
         started = time.perf_counter()
         try:
@@ -109,7 +155,9 @@ def build_server(config: Config | None = None) -> tuple[MCPServer, ToolContext]:
         usage_log=UsageLog(config.usage_log) if config.usage_log else None,
     )
 
-    for module in (connection, sprite, layers, frames, drawing, cels, inspection, animation, history):
+    for module in (
+        connection, sprite, layers, frames, drawing, cels, inspection, animation, history, batch,
+    ):
         module.register(mcp, ctx)
 
     return mcp, ctx

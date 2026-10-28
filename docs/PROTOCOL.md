@@ -98,7 +98,7 @@ agent gets "retry this" rather than an opaque string.
 
 ## Commands
 
-35 commands back 35 MCP tools. The mapping is not 1:1: `fs.probe` has no tool of
+38 commands back 38 MCP tools. The mapping is not 1:1: `fs.probe` has no tool of
 its own and is called by `get_connection_status`; `draw_rows` and `draw_rect` are
 decoded on the server into `draw.pixels`; and `get_canvas_preview` sends
 `render.layer` when it is given a `layer`.
@@ -112,9 +112,10 @@ decoded on the server into `draw.pixels`; and `get_canvas_preview` sends
 | `draw.pixels`, `draw.erase`, `draw.clearCel`, `draw.fill`, `draw.line` | drawing tools |
 | `cel.shift`, `cel.flip`, `cel.copy`, `cel.replaceColor` | cel tools |
 | `render.canvas`, `render.layer`, `inspect.region`, `inspect.palette` | inspection tools |
-| `anim.info`, `render.contactSheet`, `render.onionSkin` | animation inspection |
+| `anim.info`, `anim.compare`, `anim.bounds`, `render.contactSheet`, `render.onionSkin` | animation inspection |
 | `tag.create`, `tag.update`, `tag.delete` | tag tools |
 | `history.undo`, `history.redo` | `undo`, `redo` |
+| `batch.run` | `batch`: editing commands from the other rows, run in one transaction |
 
 The dispatch table is fixed at load. An unrecognised `command` is an
 `UNKNOWN_COMMAND` error and is never `load()`ed or evaluated.

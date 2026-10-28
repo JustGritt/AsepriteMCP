@@ -439,6 +439,74 @@ class TestCels:
         assert not aseprite.requests
 
 
+# ---------------------------------------------------------------------- batch
+
+
+class TestBatch:
+    async def test_sends_one_batch_of_encoded_commands(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 3, "undoSteps": 1, "results": []})
+        payload = json_of(await ok(mcp, "batch", ops=[
+            {"tool": "duplicate_frame", "args": {"frame": 1}},
+            {"tool": "shift_cel", "args": {"dy": -1, "frame": 2}},
+            {"tool": "draw_rows", "args": {"x": 1, "y": 1, "rows": ["a"], "legend": {"a": "#f00"}, "frame": 2}},
+        ]))
+        assert payload["applied"] == 3
+        sent = [r["command"] for r in aseprite.requests]
+        assert sent == ["batch.run"], "nothing may reach Aseprite before the batch itself"
+        assert aseprite.last("batch.run")["params"]["ops"] == [
+            {"command": "frame.duplicate", "params": {"frame": 1}},
+            {"command": "cel.shift", "params": {"dx": 0, "dy": -1, "frame": 2}},
+            {"command": "draw.pixels", "params": {
+                "pixels": [{"x": 1, "y": 1, "color": "#ff0000ff"}], "frame": 2}},
+        ]
+
+    async def test_a_bad_op_stops_the_batch_before_anything_is_sent(self, server, aseprite):
+        mcp, _ = server
+        message = await err(mcp, "batch", ops=[
+            {"tool": "duplicate_frame", "args": {"frame": 1}},
+            {"tool": "draw_rows", "args": {"x": 0, "y": 0, "rows": ["Z"], "legend": {"a": "#fff"}}},
+        ])
+        assert "ops[1] (draw_rows)" in message and "'Z'" in message
+        assert not aseprite.requests
+
+    async def test_missing_arguments_name_the_op(self, server, aseprite):
+        mcp, _ = server
+        message = await err(mcp, "batch", ops=[{"tool": "shift_cel", "args": {"dz": 3}}])
+        assert "ops[0] (shift_cel)" in message
+        assert not aseprite.requests
+
+    @pytest.mark.parametrize("tool", ["save_sprite", "get_canvas_preview", "undo", "batch", "nope"])
+    async def test_only_editing_tools_are_batchable(self, server, aseprite, tool):
+        mcp, _ = server
+        assert "cannot run inside a batch" in await err(mcp, "batch", ops=[{"tool": tool}])
+        assert not aseprite.requests
+
+    async def test_aseprite_rollback_is_reported(self, server, aseprite):
+        mcp, _ = server
+        aseprite.fail("batch.run", "INVALID_FRAME", "ops[1] (cel.shift) failed, so the whole batch was rolled back")
+        message = await err(mcp, "batch", ops=[
+            {"tool": "create_frame"}, {"tool": "shift_cel", "args": {"dx": 1, "frame": 9}},
+        ])
+        assert "INVALID_FRAME" in message and "rolled back" in message
+
+    async def test_preview_shows_the_last_frame_edited(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 1, "results": [{"written": 1, "frame": 3}]})
+        result = await ok(mcp, "batch", preview=True, ops=[
+            {"tool": "draw_rect", "args": {"x": 0, "y": 0, "width": 1, "height": 1, "color": "#fff", "frame": 3}},
+        ])
+        assert len(images(result)) == 1
+        assert aseprite.last("render.canvas")["params"]["frame"] == 3
+
+    async def test_direct_calls_are_unaffected_after_a_batch(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 1})
+        await ok(mcp, "batch", ops=[{"tool": "create_frame"}])
+        await ok(mcp, "create_frame")
+        assert aseprite.requests[-1]["command"] == "frame.create"
+
+
 # ---------------------------------------------------------------------- inspection
 
 
@@ -577,6 +645,19 @@ class TestAnimation:
         mcp, _ = server
         assert "INVALID_PARAMS" in await err(mcp, "get_animation_contact_sheet", columns=0)
 
+    async def test_compare_frames(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("anim.compare", {"changedPixels": 4, "changed": [1, 1, 2, 2]})
+        payload = json_of(await ok(mcp, "compare_frames", a=1, b=2, diff_map=True, layer="Arm"))
+        assert payload["changedPixels"] == 4
+        params = aseprite.last("anim.compare")["params"]
+        assert (params["a"], params["b"], params["diffMap"], params["layer"]) == (1, 2, True, "Arm")
+
+    async def test_animation_bounds(self, server, aseprite):
+        mcp, _ = server
+        await ok(mcp, "get_animation_bounds", tag="idle")
+        assert aseprite.last("anim.bounds")["params"] == {"tag": "idle"}
+
     async def test_onion_skin(self, server, aseprite):
         mcp, _ = server
         aseprite.reply("render.onionSkin", {"frame": 3})
@@ -653,10 +734,13 @@ MINIMAL_ARGUMENTS = {
     "flip_cel": {},
     "copy_cel": {"from_frame": 1, "to_frame": 2},
     "replace_color": {"from_color": "#000", "to_color": "#fff"},
+    "batch": {"ops": [{"tool": "create_frame"}]},
     "get_canvas_preview": {},
     "get_region": {"x": 0, "y": 0, "width": 4, "height": 4},
     "get_palette": {},
     "get_animation_info": {},
+    "compare_frames": {"a": 1, "b": 2},
+    "get_animation_bounds": {},
     "get_animation_contact_sheet": {},
     "get_onion_skin_preview": {},
     "create_animation_tag": {"name": "idle", "from_frame": 1, "to_frame": 2},

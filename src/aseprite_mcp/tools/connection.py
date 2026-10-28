@@ -12,8 +12,8 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
         title="Get connection status",
         description=(
-            "Report whether the Aseprite extension is connected and which document is "
-            "open. Call this first when any other tool reports ASEPRITE_NOT_CONNECTED."
+            "Whether Aseprite is connected, which document is open and whether previews can "
+            "be written. Call it first when a tool reports ASEPRITE_NOT_CONNECTED."
         ),
     )
     async def get_connection_status() -> str:
@@ -49,7 +49,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
 
         status.update(ctx.bridge.client_info)
         try:
-            status.update(await ctx.bridge.call("app.status"))
+            status.update(await ctx.call("app.status"))
         except BridgeError as exc:
             status["documentOpen"] = None
             status["error"] = exc.to_dict()
@@ -58,7 +58,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         # and Aseprite raises a Security modal the first time a script does that.
         # Asking on demand keeps the prompt tied to a deliberate action.
         try:
-            status.update(await ctx.bridge.call("fs.probe"))
+            status.update(await ctx.call("fs.probe"))
         except BridgeError as exc:
             status["canWriteFiles"] = None
             status["probeError"] = exc.to_dict()

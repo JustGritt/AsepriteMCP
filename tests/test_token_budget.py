@@ -21,11 +21,10 @@ from aseprite_mcp.usage import MAX_IMAGE_TOKENS, estimate_image_tokens, png_size
 
 from tests.conftest import text_of, tiny_png
 
-# Measured on 35 tools (19 395 bytes; main was 19 863 for 33), plus a little
-# headroom. The cel tools cost ~2.6 KB of definitions, cached across requests,
-# and save thousands of output tokens per animated frame. Lower this when #9
-# trims the descriptions; raise it only on purpose.
-TOOL_LIST_BUDGET = 19_750
+# Measured on 38 tools (13 360 bytes; main was 19 863 for 33) after slimming the
+# listed schemas and trimming descriptions, plus a little headroom. Raise it only
+# on purpose, for a tool that earns its place.
+TOOL_LIST_BUDGET = 13_750
 
 
 def compact(value) -> int:
@@ -75,6 +74,23 @@ async def test_tool_list_budget(server):
     for name, size in sorted(sizes.items(), key=lambda kv: -kv[1])[:5]:
         print(f"  {name}: {size}")
     assert total <= TOOL_LIST_BUDGET, f"tools/list grew to {total} bytes"
+
+
+async def test_listed_schemas_carry_no_pydantic_boilerplate(server):
+    mcp, _ = server
+    for tool in await mcp.list_tools():
+        text = json.dumps(tool.input_schema)
+        assert '"title"' not in text, tool.name
+        assert '{"type": "null"}' not in text, tool.name
+
+
+async def test_slimmed_schemas_still_validate(server, aseprite):
+    """The listed schema is slimmer, but arguments are checked against the full one."""
+    mcp, _ = server
+    with pytest.raises(Exception, match="frame"):
+        await mcp.call_tool("select_frame", {"frame": "three"})
+    result = await mcp.call_tool("get_canvas_preview", {"frame": None})
+    assert not result.is_error, "an explicit null for an optional argument still works"
 
 
 async def test_no_tool_sends_its_reply_twice(server):

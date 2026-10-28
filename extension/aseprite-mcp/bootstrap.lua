@@ -48,6 +48,10 @@ return function()
       dispatch[name] = handler
     end
   end
+  -- Registered last, because a batch dispatches to every other command.
+  for name, handler in pairs(loadModule("commands/batch.lua")(deps, dispatch)) do
+    dispatch[name] = handler
+  end
 
   return {
     proto = proto,

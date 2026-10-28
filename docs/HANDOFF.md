@@ -9,15 +9,15 @@ saves the most time.
 
 Phases 1–5 of [ASEPRITE_MCP.md](ASEPRITE_MCP.md) are built and verified end to
 end, and the connect dialog that replaced the old menu entries is in.
-**35 MCP tools** drive a live Aseprite session over a loopback WebSocket, on top
-of 35 Lua commands. The mapping is not 1:1: `app.status` and `fs.probe` are called
+**38 MCP tools** drive a live Aseprite session over a loopback WebSocket, on top
+of 38 Lua commands. The mapping is not 1:1: `app.status` and `fs.probe` are called
 by the server rather than exposed, and `draw_rows` / `draw_rect` are decoded into
 `draw.pixels` server-side. Token-cost work is tracked in GitHub issue #10.
 
 | | |
 | --- | --- |
-| Python tests | 251 passing |
-| Lua assertions | 282 passing, against the real engine |
+| Python tests | 273 passing |
+| Lua assertions | 308 passing, against the real engine |
 | End-to-end | 34/34 spec §29 workflow, from the session that landed `593bf03` |
 | Aseprite | 1.3.18.3, `apiVersion` 41, Steam build |
 
@@ -27,6 +27,8 @@ uv run pytest -q
 
 # Lua suite, headless against the real engine
 & "Z:\Program Files (x86)\Steam\steamapps\common\Aseprite\Aseprite.exe" -b --script "tests\lua\run_tests.lua"
+# ...the same on macOS (Steam build); `uv run pytest -m lua` also finds it
+"$HOME/Library/Application Support/Steam/steamapps/common/Aseprite/Aseprite.app/Contents/MacOS/aseprite" -b --script tests/lua/run_tests.lua
 
 # Dialog API probe -- GUI only, see "What Dialog actually does" below
 & "Z:\Program Files (x86)\Steam\steamapps\common\Aseprite\Aseprite.exe" --script "tests\lua\probe_dialog.lua"
@@ -233,8 +235,8 @@ Full env var list: `ASEPRITE_MCP_HOST`, `_PORT`, `_TOKEN`, `_REQUIRE_TOKEN`,
 
 ## Deferred, still deferred
 
-Phase 6 — `compare_frames` (the cel transforms landed with the token-cost work, #5),
-`get_used_palette`, `get_animation_bounds`, `get_history_info`.
+Phase 6 — `get_used_palette`, `get_history_info`. (The cel transforms,
+`compare_frames` and `get_animation_bounds` landed with the token-cost work, #10.)
 
 Edit transactions (`begin_edit` / `commit_edit` / `rollback_edit`, spec §16) stay
 deferred on purpose. The obvious implementation — count transactions since

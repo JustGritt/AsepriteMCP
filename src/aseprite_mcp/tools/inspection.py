@@ -75,12 +75,9 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
         title="Get canvas preview",
         description=(
-            "Render the composited sprite, or one layer alone with layer=, as a PNG to "
-            "look at: nearest-neighbour scaled over a checkerboard. Defaults to the "
-            "active frame. region=[x, y, width, height] zooms into part of the canvas; "
-            "pass a draw call's changed box to check just what you edited. Large "
-            "renders are scaled down to a size cap, so zoom with region rather than "
-            "raising scale."
+            "Render the sprite, or one layer, as a PNG to look at. region=[x, y, width, "
+            "height] zooms in; a draw reply's changed box is a ready-made region. Large "
+            "renders are capped in size, so zoom rather than raising scale."
         ),
     )
     async def get_canvas_preview(
@@ -105,11 +102,9 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
         title="Get region pixels",
         description=(
-            "Read exact pixel values for a rectangle as a character map: each row is "
-            "one pixel row, left to right; '.' is transparent, ' ' is outside the "
-            "canvas, and legend maps every other character to its color. Much cheaper "
-            "than a preview when you need certainty about specific pixels, and "
-            "draw_rows writes the same format back."
+            "Exact pixels as rows of characters: '.' is transparent, ' ' is off-canvas, and "
+            "legend maps the rest to colors. Cheaper than a preview for exact checks; "
+            "draw_rows writes the same format."
         ),
     )
     async def get_region(
@@ -137,15 +132,14 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             params["frame"] = frame
         if layer is not None:
             params["layer"] = layer
-        return as_json(await ctx.bridge.call("inspect.region", params))
+        return as_json(await ctx.call("inspect.region", params))
 
     @mcp.tool(
         title="Get palette",
         description=(
-            "List the palette of the active sprite as index and hex color. Read this "
-            "before drawing so you reuse existing colors instead of introducing "
-            "near-duplicates, and so you can address indexed sprites by index."
+            "The palette's colors in index order. Reuse them rather than adding "
+            "near-duplicates."
         ),
     )
     async def get_palette() -> str:
-        return as_json(await ctx.bridge.call("inspect.palette"))
+        return as_json(await ctx.call("inspect.palette"))

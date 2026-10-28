@@ -16,17 +16,16 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
         title="Undo",
         description=(
-            "Undo the most recent change to the active sprite using Aseprite native "
-            "history. One call reverses one previous tool call. Preview afterwards to "
-            "confirm the document is back in the state you expected."
+            "Undo the most recent change. Each step reverses exactly one tool call, or one "
+            "whole batch."
         ),
     )
     async def undo() -> str:
-        return as_json(await ctx.bridge.call("history.undo"))
+        return as_json(await ctx.call("history.undo"))
 
     @mcp.tool(
         title="Redo",
         description="Redo the most recently undone change to the active sprite.",
     )
     async def redo() -> str:
-        return as_json(await ctx.bridge.call("history.redo"))
+        return as_json(await ctx.call("history.redo"))
