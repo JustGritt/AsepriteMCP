@@ -49,9 +49,22 @@ Also note the session total from `/cost` in Claude Code.
 
 ## Benchmark set
 
-Run each prompt in a fresh Claude Code session. Start each one on a blank sprite
-of the given size, made with `new_sprite`. Use the same model for every run, and
-record `/cost` plus the usage-log totals, before and after the change.
+Run each prompt in a fresh Claude Code session, with the same model for every
+run, before and after the change. `scripts/run_benchmarks.py` does this: each
+prompt gets its own headless `claude -p` session, started outside the repo with
+only the aseprite server, on a fresh copy of a fixture from
+`tests/lua/make_bench_fixtures.lua`, so every version starts from identical
+documents. It records the session's cost, tokens and tool calls.
+
+```sh
+uv run python scripts/run_benchmarks.py --label baseline --server-dir <old checkout>
+uv run python scripts/run_benchmarks.py --label current
+uv run python scripts/run_benchmarks.py --compare baseline current
+```
+
+Disable the aseprite server in any other Claude Code session first, since only
+one server can hold the bridge port, and install the Aseprite extension from the
+same checkout as `--server-dir`.
 
 | # | Canvas | Prompt |
 |---|---|---|
