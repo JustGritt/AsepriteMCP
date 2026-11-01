@@ -11,9 +11,11 @@ import json
 
 import pytest
 
+from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 
-from tests.conftest import json_of, text_of
+from aseprite_mcp.tools.base import MAX_REMEMBERED_IMAGES
+from tests.conftest import json_of, text_of, tiny_png
 
 pytestmark = pytest.mark.asyncio
 
@@ -658,6 +660,95 @@ class TestInspection:
         mcp, _ = server
         aseprite.reply("inspect.palette", {"colors": ["#000000", "#ffffff"]})
         assert json_of(await ok(mcp, "get_palette"))["colors"] == ["#000000", "#ffffff"]
+
+
+# ---------------------------------------------------------------- repeated images
+
+RED = tiny_png(b"\xff\x00\x00\xff")
+BLUE = tiny_png(b"\x00\x00\xff\xff")
+
+
+class TestRepeatedImages:
+    """An image stays in the agent's context, so resending one pays for it twice."""
+
+    async def test_an_identical_preview_is_not_sent_twice(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("render.canvas", {"frame": 1, "width": 32, "height": 32, "scale": 8})
+        assert len(images(await ok(mcp, "get_canvas_preview"))) == 1
+        repeat = await ok(mcp, "get_canvas_preview")
+        assert not images(repeat)
+        assert "Unchanged since this view's last image" in text_of(repeat)
+        assert "frame 1, 32x32 source" in text_of(repeat)
+
+    async def test_an_edit_in_between_sends_the_new_image(self, server, aseprite):
+        mcp, _ = server
+        aseprite.png = RED
+        await ok(mcp, "get_canvas_preview")
+        # Drawn by the agent or by hand in Aseprite: only the pixels count.
+        aseprite.png = BLUE
+        assert len(images(await ok(mcp, "get_canvas_preview"))) == 1
+
+    async def test_asking_again_resends_it(self, server, aseprite):
+        # The way back for an agent whose copy was compacted away.
+        mcp, _ = server
+        await ok(mcp, "get_canvas_preview")
+        assert not images(await ok(mcp, "get_canvas_preview"))
+        assert len(images(await ok(mcp, "get_canvas_preview"))) == 1
+        assert not images(await ok(mcp, "get_canvas_preview"))
+
+    async def test_undoing_back_to_an_older_image_resends_it(self, server, aseprite):
+        # "Unchanged since the last image" would point at the wrong one.
+        mcp, _ = server
+        aseprite.png = RED
+        await ok(mcp, "get_canvas_preview")
+        aseprite.png = BLUE
+        await ok(mcp, "get_canvas_preview")
+        aseprite.png = RED
+        assert len(images(await ok(mcp, "get_canvas_preview"))) == 1
+
+    async def test_an_identical_frame_names_the_earlier_view(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("render.canvas", lambda params: {"frame": params.get("frame")})
+        await ok(mcp, "get_canvas_preview", frame=1)
+        text = text_of(await ok(mcp, "get_canvas_preview", frame=2))
+        assert "Identical to the last image of frame 1" in text
+        assert text.endswith("frame 2")
+        # Asking about frame 2 leaves frame 1's image current.
+        assert not images(await ok(mcp, "get_canvas_preview", frame=1))
+
+    async def test_a_batch_preview_counts(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 1, "results": [{"frame": 1}]})
+        aseprite.reply("render.canvas", {"frame": 1})
+        result = await ok(mcp, "batch", preview=True, ops=[
+            {"tool": "select_frame", "args": {"frame": 1}},
+        ])
+        assert len(images(result)) == 1
+        assert not images(await ok(mcp, "get_canvas_preview", frame=1))
+
+    async def test_contact_sheets_and_onion_skins_keep_their_text(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("render.contactSheet", {"cells": [{"frame": 1, "durationMs": 80}]})
+        aseprite.reply("render.onionSkin", {"frame": 2})
+        aseprite.png = RED
+        await ok(mcp, "get_animation_contact_sheet")
+        sheet = await ok(mcp, "get_animation_contact_sheet")
+        assert not images(sheet)
+        assert "F1 80ms" in text_of(sheet)
+        aseprite.png = BLUE
+        await ok(mcp, "get_onion_skin_preview")
+        onion = await ok(mcp, "get_onion_skin_preview")
+        assert not images(onion)
+        assert "previous frame is tinted" in text_of(onion)
+
+    async def test_memory_is_bounded(self, server):
+        _, ctx = server
+        first = Image(data=b"first", format="png")
+        ctx.image_or_note(first, "a")
+        for i in range(MAX_REMEMBERED_IMAGES):
+            ctx.image_or_note(Image(data=b"other %d" % i, format="png"), f"view {i}")
+        assert len(ctx._image_labels) == MAX_REMEMBERED_IMAGES
+        assert ctx.image_or_note(first, "a") is first
 
 
 # ---------------------------------------------------------------------- animation

@@ -102,7 +102,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
                 "cells (left to right, top to bottom): "
                 + "; ".join(describe_cell(c) for c in cells)
             )
-        return [image, "\n".join(summary)]
+        return [ctx.image_or_note(image, f"contact sheet, {summary[0]}"), "\n".join(summary)]
 
     @mcp.tool(
         title="Get onion skin preview",
@@ -123,7 +123,8 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             "previous frame is tinted and faint, current frame is fully opaque, "
             "next frame is tinted and faint"
         )
-        return [image, f"{describe(result)}. {legend}"]
+        label = describe(result)
+        return [ctx.image_or_note(image, f"onion skin, {label}"), f"{label}. {legend}"]
 
     # ------------------------------------------------------------------------ tags
 

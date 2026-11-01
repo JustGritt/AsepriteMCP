@@ -16,8 +16,8 @@ by the server rather than exposed, and `draw_rows` / `draw_rect` are decoded int
 
 | | |
 | --- | --- |
-| Python tests | 285 passing |
-| Lua assertions | 325 passing, against the real engine |
+| Python tests | 296 passing |
+| Lua assertions | 333 passing, against the real engine |
 | End-to-end | 34/34 spec §29 workflow, from the session that landed `593bf03` |
 | Aseprite | 1.3.18.3, `apiVersion` 41, Steam build |
 

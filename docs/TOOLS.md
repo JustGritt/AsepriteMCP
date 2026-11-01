@@ -221,6 +221,20 @@ whole number, so a capped render is smaller rather than blurred. Small sprites
 keep the default 8×; a 128×128 sprite drops to 6×. To see detail, zoom with
 `region` instead of raising `scale`.
 
+No image is sent twice. When a render (a preview, contact sheet, onion skin or
+`batch` preview) is byte-identical to the latest image already sent for that
+view, the reply is text instead:
+
+```
+Unchanged since this view's last image, so it was not sent again. If you no longer have it, call again.
+frame 2, 32x32 source, scaled 8x nearest-neighbour
+```
+
+If it matches another view, for example a duplicated frame, the note names it:
+`Identical to the last image of frame 1, ...`. Any change to the pixels counts,
+including one made by hand in Aseprite. Asking again right after such a reply
+sends the image, for an agent whose copy was compacted away.
+
 ### `get_canvas_preview(scale=8, frame=None, layer=None, region=None)`
 The composited sprite as a PNG. Defaults to the active frame. Call after every
 substantial edit and actually look at it.

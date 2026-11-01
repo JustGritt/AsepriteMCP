@@ -151,6 +151,14 @@ suggests transparency, but a transparent PNG is composited by whatever views it,
 which can make a light sprite invisible on white or a dark one invisible on
 black. The response text always states that the checkerboard is not artwork.
 
+An image the agent already has is not sent again. Aseprite writes byte-identical
+PNGs for identical pixels (a Lua test pins this), so the server compares the
+bytes of each render with the images it has sent. Issue #3 proposed a document
+revision bumped by `sprite.events` instead. Comparing bytes needs no Lua state,
+can't miss a change that fires no event, and counts manual edits and undo
+without hooking anything. The cost is that Aseprite still renders the
+image, which it did before anyway. See `ToolContext.image_or_note`.
+
 ## Safety
 
 - Loopback binding only, unless explicitly overridden.

@@ -140,7 +140,10 @@ main cost of a preview. `region` is optional and is clamped to the canvas.
 
 Lua writes the PNG there and replies with metadata only; the server reads the
 bytes, returns them as MCP image content, and deletes the file. `outPath` is
-never model-supplied, so it cannot be aimed anywhere else.
+never model-supplied, so it cannot be aimed anywhere else. The server leaves
+out an image whose bytes match the latest one it sent for the same view (see
+[TOOLS.md](TOOLS.md#inspection)). That relies on Lua writing identical PNG bytes
+for identical pixels, which a Lua test pins.
 
 If the reply says `ok` but no file appeared, the server raises `LUA_ERROR`
 pointing at the file-access grant in [SETUP.md](SETUP.md) — the usual cause.
