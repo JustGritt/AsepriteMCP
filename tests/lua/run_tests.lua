@@ -569,6 +569,45 @@ test("batch.run applies several commands as one undo step", function()
   sprite:close()
 end)
 
+test("batch results carry what the server's summary reads", function()
+  -- tools/batch.py replaces these results with a summary, and tests there use a
+  -- fake extension. If a field is renamed here, this is what notices.
+  local sprite = newSprite(8, 8)
+  local r = call("batch.run", { ops = {
+    { command = "layer.create", params = { name = "New" } },
+    { command = "frame.create", params = {} },
+    { command = "frame.duplicate", params = { frame = 1 } },
+    { command = "draw.pixels", params = { frame = 1, pixels = { { x = 1, y = 1, color = "#ff0000ff" },
+      { x = 99, y = 0, color = "#ff0000ff" } } } },
+    { command = "draw.line", params = { frame = 1, x1 = 0, y1 = 0, x2 = 3, y2 = 0, color = "#00ff00ff" } },
+    { command = "draw.fill", params = { frame = 1, x = 7, y = 7, color = "#0000ffff" } },
+    { command = "draw.erase", params = { frame = 1, pixels = { { x = 1, y = 1 } } } },
+    { command = "cel.replaceColor", params = { frames = { 1 }, from = "#00ff00ff", to = "#ffffffff" } },
+    { command = "cel.replaceColor", params = { frames = { 1 }, from = "#123456ff", to = "#ffffffff" } },
+    { command = "frame.delete", params = { frame = 3 } },
+  } }).results
+
+  equals(r[1].name, "New", "layer.create: name")
+  check(type(r[1].id) == "string", "layer.create: id")
+  equals(r[2].frame, 2, "frame.create: frame")
+  equals(r[3].frame, 2, "frame.duplicate: frame")
+  equals(r[3].frameCount, 3, "frame.duplicate: frameCount")
+  equals(r[4].written, 1, "draw.pixels: written")
+  equals(r[4].skippedOffCanvas, 1, "draw.pixels: skippedOffCanvas")
+  check(type(r[4].warning) == "string", "draw.pixels: warning")
+  equals(#r[4].changed, 4, "draw.pixels: changed is a box")
+  equals(r[5].written, 4, "draw.line: written")
+  equals(#r[5].changed, 4, "draw.line: changed is a box")
+  check(r[6].filled > 0, "draw.fill: filled")
+  equals(#r[6].changed, 4, "draw.fill: changed is a box")
+  equals(r[7].erased, 1, "draw.erase: erased")
+  equals(r[8].replaced, 4, "cel.replaceColor: replaced")
+  equals(#r[8].changed, 4, "cel.replaceColor: changed is a box")
+  check(type(r[9].note) == "string", "an op that did nothing says so in note")
+  equals(r[10].frameCount, 2, "frame.delete: frameCount")
+  sprite:close()
+end)
+
 test("batch.run is all or nothing", function()
   local sprite = newSprite(8, 8)
   expectError("batch.run", { ops = {

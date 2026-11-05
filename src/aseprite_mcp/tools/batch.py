@@ -32,6 +32,13 @@ BATCHABLE = frozenset({
 })
 
 
+# Added up across ops. Comparing written with the expected count is how a
+# miscounted row gets caught, so these stay when the per-op replies go.
+_TOTALS = ("written", "filled", "erased", "replaced", "skippedOffCanvas")
+
+_MAX_PALETTE_NOTES = 5
+
+
 class BatchOp(BaseModel):
     tool: str = Field(description="Name of an editing tool, e.g. draw_rows or shift_cel.")
     args: dict[str, Any] = Field(default_factory=dict, description="That tool's arguments.")
@@ -40,6 +47,67 @@ class BatchOp(BaseModel):
 def _reason(exc: Exception) -> str:
     """The tool's own message, without the SDK's 'Error executing tool' prefix."""
     return str(exc.__cause__) if exc.__cause__ else str(exc)
+
+
+def _union(boxes: list[list[int]]) -> list[int]:
+    left = min(box[0] for box in boxes)
+    top = min(box[1] for box in boxes)
+    right = max(box[0] + box[2] for box in boxes)
+    bottom = max(box[1] + box[3] for box in boxes)
+    return [left, top, right - left, bottom - top]
+
+
+def _summary(reply: dict[str, Any], commands: list[dict[str, Any]]) -> dict[str, Any]:
+    """What the agent cannot work out from the ops it just sent.
+
+    One entry per op mostly repeats the layer, frame and coordinates, and the
+    reply stays in context for the rest of the session. So this keeps the totals,
+    the changed box, what got created, and anything that says an op went wrong or
+    did nothing, with that op's index. Each op is one command, so a result's
+    position is its op's index.
+    """
+    summary: dict[str, Any] = {"applied": reply.get("applied"), "undoSteps": reply.get("undoSteps")}
+    totals = dict.fromkeys(_TOTALS, 0)
+    boxes: list[list[int]] = []
+    created: list[dict[str, Any]] = []
+    new_frames: list[int] = []
+    warnings: list[dict[str, Any]] = []
+    palette_notes: list[str] = []
+
+    for op, (command, result) in enumerate(zip(commands, reply.get("results") or [])):
+        name = command["command"]
+        for key in _TOTALS:
+            # type(), because cel.copy reports replaced as a bool, and True is an int.
+            if type(result.get(key)) in (int, float):
+                totals[key] += result[key]
+        if result.get("changed"):
+            boxes.append(result["changed"])
+        # select_layer and select_frame reply with an id or a frame too, so the
+        # command is what says something new exists.
+        if name == "layer.create":
+            created.append({"id": result.get("id"), "name": result.get("name")})
+        elif name in ("frame.create", "frame.duplicate"):
+            new_frames.append(result.get("frame"))
+        if "frameCount" in result:
+            summary["frameCount"] = result["frameCount"]
+        # A note says an op did nothing, e.g. "No pixel matched that color."
+        said = [text for text in (result.get("warning"), result.get("note")) if text]
+        if said:
+            warnings.append({"op": op, "warning": " ".join(said)})
+        for note in [result.get("paletteNote"), *result.get("paletteNotes", [])]:
+            if note and note not in palette_notes and len(palette_notes) < _MAX_PALETTE_NOTES:
+                palette_notes.append(note)
+
+    summary.update({key: total for key, total in totals.items() if total})
+    optional = {
+        "changed": _union(boxes) if boxes else None,
+        "created": created,
+        "newFrames": new_frames,
+        "warnings": warnings,
+        "paletteNotes": palette_notes,
+    }
+    summary.update({key: value for key, value in optional.items() if value})
+    return summary
 
 
 def register(mcp: MCPServer, ctx: ToolContext) -> None:
@@ -82,7 +150,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         reply = await ctx.call(
             "batch.run", {"ops": commands}, timeout=ctx.config.render_timeout
         )
-        content: list[Image | str] = [as_json(reply)]
+        content: list[Image | str] = [as_json(_summary(reply, commands))]
 
         if preview:
             frames = [r["frame"] for r in reply.get("results", []) if isinstance(r, dict) and "frame" in r]

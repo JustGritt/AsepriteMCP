@@ -390,6 +390,26 @@ frame used to cost one turn per step; a batch is one turn.
   its index (`ops[1] (draw_rows): ...`) and nothing reaches Aseprite.
 - **All or nothing.** If an op fails inside Aseprite, every op is rolled back,
   and the error names the op that failed.
+- **The reply is a summary, not one entry per op.** Most of a per-op reply repeats
+  what was just sent, and it stays in context for the rest of the session, so its
+  size doesn't grow with the op count unless something notable happened:
+
+  ```json
+  {"applied": 94, "undoSteps": 1, "changed": [0, 57, 91, 71], "written": 528,
+   "filled": 3463, "created": [{"id": "fffb0d4f", "name": "Cliff"}]}
+  ```
+
+  - `changed` is the union of every draw, fill and recolor box, across layers and
+    frames. It makes a ready-made preview region, but erases and cel moves report
+    no box, so it doesn't cover those.
+  - `written`, `filled`, `erased`, `replaced` and `skippedOffCanvas` are totals,
+    left out when zero. Comparing `written` with the expected count catches a
+    miscounted row.
+  - `created` lists new layers and `newFrames` lists new frame numbers, both in op
+    order. `frameCount` is the count after the last op that changed it.
+  - `warnings` is `[{"op": 12, "warning": "..."}]`, with the op's index. It also
+    carries notes saying an op did nothing, like `No pixel matched that color.`
+  - `paletteNotes` lists each palette note once, at most five.
 - `preview=true` appends a canvas preview of the last frame an op reported.
 - Batchable tools: the drawing, cel and frame tools, `select_layer`,
   `create_layer`, `set_layer_visibility` and the tag tools. Previews, file

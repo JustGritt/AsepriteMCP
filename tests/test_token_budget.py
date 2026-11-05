@@ -138,6 +138,26 @@ async def test_draw_rows_costs_a_fraction_of_draw_pixels(server, aseprite):
     assert row_bytes * 10 <= pixel_bytes
 
 
+async def test_batch_reply_does_not_grow_with_its_ops(server, aseprite):
+    """Most of a per-op reply repeats what the agent just sent, and stays in context."""
+    mcp, _ = server
+
+    async def reply_size(count: int) -> int:
+        aseprite.reply("batch.run", {"applied": count, "undoSteps": 1, "results": [
+            {"written": 8, "changed": [i % 90, 57, 8, 1], "layer": "Cliff", "frame": 1}
+            for i in range(count)
+        ]})
+        ops = [
+            {"tool": "draw_line", "args": {"x1": 0, "y1": 57, "x2": 7, "y2": 57, "color": "#fff"}}
+        ] * count
+        return len(text_of(await mcp.call_tool("batch", {"ops": ops})))
+
+    small, large = await reply_size(5), await reply_size(100)
+    print(f"\nbatch reply: {small} bytes for 5 ops, {large} bytes for 100 ops")
+    assert large <= small + 4, "only the counts themselves may get longer"
+    assert large <= 120
+
+
 async def test_usage_log_records_every_call(server, aseprite, config):
     mcp, _ = server
     await mcp.call_tool("get_sprite_info", {})

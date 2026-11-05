@@ -743,6 +743,128 @@ class TestBatch:
         await ok(mcp, "create_frame")
         assert aseprite.requests[-1]["command"] == "frame.create"
 
+    async def test_reply_keeps_only_what_the_agent_cannot_derive(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 3, "undoSteps": 1, "results": [
+            {"id": "aaaa1111", "name": "Cliff", "stackIndex": 2},
+            {"written": 4, "changed": [1, 2, 3, 4], "layer": "Cliff", "frame": 1},
+            {"filled": 9, "changed": [10, 0, 2, 2], "layer": "Cliff", "frame": 1},
+        ]})
+        payload = json_of(await ok(mcp, "batch", ops=[
+            {"tool": "create_layer", "args": {"name": "Cliff"}},
+            {"tool": "draw_line", "args": {"x1": 1, "y1": 2, "x2": 3, "y2": 5, "color": "#fff"}},
+            {"tool": "fill", "args": {"x": 10, "y": 0, "color": "#fff"}},
+        ]))
+        assert payload == {
+            "applied": 3,
+            "undoSteps": 1,
+            "changed": [1, 0, 11, 6],
+            "written": 4,
+            "filled": 9,
+            "created": [{"id": "aaaa1111", "name": "Cliff"}],
+        }
+
+    async def test_totals_add_up_across_ops(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 5, "results": [
+            {"written": 3, "erased": 1, "frame": 1},
+            {"written": 2, "skippedOffCanvas": 4, "frame": 1},
+            {"erased": 2, "frame": 1},
+            {"replaced": 7, "frames": 1},
+            # cel.copy reports a boolean here, and Python would count True as 1.
+            {"from": {"frame": 1}, "to": {"frame": 2}, "replaced": True},
+        ]})
+        payload = json_of(await ok(mcp, "batch", ops=[{"tool": "create_frame"}] * 5))
+        assert payload["written"] == 5
+        assert payload["erased"] == 3
+        assert payload["skippedOffCanvas"] == 4
+        assert payload["replaced"] == 7
+
+    async def test_empty_totals_are_left_out(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 1, "results": [{"filled": 0, "frame": 1}]})
+        payload = json_of(await ok(mcp, "batch", ops=[{"tool": "fill", "args": {"x": 0, "y": 0, "color": "#fff"}}]))
+        assert "filled" not in payload
+        assert "changed" not in payload
+
+    async def test_only_new_layers_count_as_created(self, server, aseprite):
+        # Selecting or hiding a layer replies with the same id and name.
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 3, "results": [
+            {"id": "old11111", "name": "Old"},
+            {"id": "old11111", "name": "Old", "visible": False},
+            {"id": "new22222", "name": "New", "stackIndex": 3},
+        ]})
+        payload = json_of(await ok(mcp, "batch", ops=[
+            {"tool": "select_layer", "args": {"layer": "Old"}},
+            {"tool": "set_layer_visibility", "args": {"layer": "Old", "visible": False}},
+            {"tool": "create_layer", "args": {"name": "New"}},
+        ]))
+        assert payload["created"] == [{"id": "new22222", "name": "New"}]
+
+    async def test_only_new_frames_are_listed(self, server, aseprite):
+        # Selecting a frame or setting its duration replies with a frame number too.
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 4, "results": [
+            {"frame": 1},
+            {"frame": 2, "durationMs": 100, "frameCount": 2},
+            {"frame": 3, "copiedFrom": 2, "durationMs": 100, "frameCount": 3},
+            {"frame": 3, "durationMs": 80},
+        ]})
+        payload = json_of(await ok(mcp, "batch", ops=[
+            {"tool": "select_frame", "args": {"frame": 1}},
+            {"tool": "create_frame"},
+            {"tool": "duplicate_frame", "args": {"frame": 2}},
+            {"tool": "set_frame_duration", "args": {"frame": 3, "duration_ms": 80}},
+        ]))
+        assert payload["newFrames"] == [2, 3]
+        assert payload["frameCount"] == 3
+
+    async def test_frame_count_follows_the_last_op_that_reports_it(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 2, "results": [
+            {"frame": 2, "durationMs": 100, "frameCount": 2},
+            {"deleted": 2, "frameCount": 1},
+        ]})
+        payload = json_of(await ok(mcp, "batch", ops=[
+            {"tool": "create_frame"}, {"tool": "delete_frame", "args": {"frame": 2}},
+        ]))
+        assert payload["frameCount"] == 1
+
+    async def test_warnings_and_notes_name_their_op(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 3, "results": [
+            {"written": 1, "frame": 1},
+            {"written": 0, "warning": "2 pixel(s) fell outside the 8x8 canvas and were ignored."},
+            {"replaced": 0, "note": "No pixel matched that color."},
+        ]})
+        payload = json_of(await ok(mcp, "batch", ops=[{"tool": "create_frame"}] * 3))
+        assert payload["warnings"] == [
+            {"op": 1, "warning": "2 pixel(s) fell outside the 8x8 canvas and were ignored."},
+            {"op": 2, "warning": "No pixel matched that color."},
+        ]
+
+    async def test_palette_notes_appear_once(self, server, aseprite):
+        mcp, _ = server
+        note = "#123456 is not in the palette; used the closest entry."
+        aseprite.reply("batch.run", {"applied": 3, "results": [
+            {"written": 1, "paletteNotes": [note]},
+            {"written": 1, "paletteNote": note},
+            {"filled": 1, "paletteNote": "Another note."},
+        ]})
+        payload = json_of(await ok(mcp, "batch", ops=[{"tool": "create_frame"}] * 3))
+        assert payload["paletteNotes"] == [note, "Another note."]
+
+    async def test_per_op_results_stay_out_of_the_reply(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 1, "results": [{"written": 1, "layer": "Art", "frame": 3}]})
+        result = await ok(mcp, "batch", preview=True, ops=[
+            {"tool": "draw_rect", "args": {"x": 0, "y": 0, "width": 1, "height": 1, "color": "#fff", "frame": 3}},
+        ])
+        assert "results" not in text_of(result)
+        assert "echo" not in text_of(result)
+        assert aseprite.last("render.canvas")["params"]["frame"] == 3, "preview still finds the frame"
+
 
 # ---------------------------------------------------------------------- inspection
 
