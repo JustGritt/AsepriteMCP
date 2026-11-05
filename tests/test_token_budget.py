@@ -21,7 +21,7 @@ from aseprite_mcp.usage import MAX_IMAGE_TOKENS, estimate_image_tokens, png_size
 
 from tests.conftest import text_of, tiny_png
 
-# Measured on 41 tools (15 116 bytes), plus a little headroom. Raise this only on
+# Measured on 41 tools (15 160 bytes), plus a little headroom. Raise this only on
 # purpose, for a tool that earns its place:
 # - new_sprite, ~560 bytes: without it an agent cannot start a sprite at all (#12).
 # - import_spritesheet and export_spritesheet, ~1 190 bytes: without them a game's

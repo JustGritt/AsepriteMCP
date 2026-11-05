@@ -73,6 +73,13 @@ paths resolve against the first allowed directory. Outside the sandbox →
 `PATH_NOT_ALLOWED`. Replies with the same overview as `get_sprite_info`, so no
 read has to follow.
 
+If the file is already open, this switches to its tab rather than opening a second
+one, and the reply adds `"alreadyOpen": true`, plus `"unsaved": true` if the tab has
+edits. The tab wins over the file on disk, because it may hold the user's work.
+This is also how to get back to a tab, if its file is in an allowed directory.
+
+A PNG always opens as one frame, even with numbered neighbours like `sheet2.png`.
+
 ### `save_sprite(path=None)`
 Saves over the document's own file, or to `path`. Either way the target must be a
 `.aseprite` / `.ase` file inside an allowed directory, so a layered source can
