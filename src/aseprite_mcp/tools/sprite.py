@@ -32,7 +32,7 @@ async def _own_file(ctx: ToolContext) -> str:
     except BridgeError as exc:
         raise BridgeError(
             exc.code,
-            f"Not saving over this sprite's own file. {exc.message} "
+            f"Not saving over this sprite's own file. {exc.message}. "
             "Pass a path to save a .aseprite copy inside an allowed directory.",
         ) from exc
     return own_file

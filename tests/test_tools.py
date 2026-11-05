@@ -164,7 +164,8 @@ class TestSprite:
         aseprite.reply("sprite.info", {"path": str(sandbox / "flat.png")})
         message = await err(mcp, "save_sprite")
         assert "PATH_NOT_ALLOWED" in message
-        assert "Pass a path" in message
+        # The sandbox's own message ends without a stop, and this one follows it.
+        assert ".aseprite. Pass a path" in message
         assert not [r for r in aseprite.requests if r["command"] == "sprite.save"]
 
     @pytest.mark.parametrize("name", ["", "Sprite", "hero.aseprite"])
