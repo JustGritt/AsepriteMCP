@@ -120,6 +120,12 @@ decoded on the server into `draw.pixels`; and `get_canvas_preview` sends
 The dispatch table is fixed at load. An unrecognised `command` is an
 `UNKNOWN_COMMAND` error and is never `load()`ed or evaluated.
 
+`sprite.save` takes either `path` or `expectedPath`, and refuses a call with
+neither. For a save with no path, the server reads the active document's path
+with `sprite.info`, puts it through the sandbox and sends it back as
+`expectedPath`. Lua refuses with `INVALID_PARAMS` if the active document no longer
+has that path, since the user can switch tabs between the two commands.
+
 ## Renders
 
 Render commands take an extra `outPath` that the **server** generates inside its

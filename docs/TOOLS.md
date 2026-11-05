@@ -73,8 +73,12 @@ paths resolve against the first allowed directory. Outside the sandbox →
 read has to follow.
 
 ### `save_sprite(path=None)`
-Saves over the source file, or to `path`. Only `.aseprite` / `.ase` may be
-written, so a layered source can never be flattened to PNG by accident.
+Saves over the document's own file, or to `path`. Either way the target must be a
+`.aseprite` / `.ase` file inside an allowed directory, so a layered source can
+never be flattened to PNG by accident. The active document can be anything the
+user opened by hand, so its own file gets the same check as a path the agent
+names: a document from a `.png` or from outside the sandbox is refused until a
+`path` gives it a new home. A sprite that was never saved needs a `path` too.
 
 ---
 

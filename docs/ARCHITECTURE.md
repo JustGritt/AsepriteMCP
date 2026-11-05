@@ -165,6 +165,8 @@ image, which it did before anyway. See `ToolContext.image_or_note`.
 - Paths are canonicalised with `realpath` (which resolves `..`, symlinks **and
   Windows junctions**) and `normcase`, then matched against the allowlist on path
   *components*, so `sprites-evil` cannot pass as `sprites`. See `paths.py`.
+- A save with no path goes through the same check, using the document's own file,
+  and Lua refuses if the active tab changed after that check.
 - No `run_lua`, no shell, no arbitrary deletion. Deleting layers, frames and cels
   is fine: it is contained in the document and undoable.
 - Batch and region caps stop one call from stalling the editor or flooding the
