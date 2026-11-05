@@ -17,7 +17,7 @@ by the server rather than exposed, and `draw_rows` / `draw_rect` are decoded int
 | | |
 | --- | --- |
 | Python tests | 330 passing |
-| Lua assertions | 436 passing, against the real engine |
+| Lua assertions | 463 passing, against the real engine |
 | End-to-end | 34/34 spec §29 workflow, from the session that landed `593bf03` |
 | Sprite sheets | A real 64x352 sheet with three frame sizes rebuilt in the live app, area by area: 0 raw RGBA differences, on 1.3.18.6 |
 | Aseprite | 1.3.18.3, `apiVersion` 41, Steam build |
@@ -209,13 +209,13 @@ in the code as well; this is the index.
   destination as it was, and alpha 105 comes out as a mix at alpha 255. To replace
   pixels, pass `255, BlendMode.SRC`. `render.crop` gets away with the default only
   because it draws onto a cleared image.
-- **`app.open` is not a safe way to read a file.** Reopening an open file makes a
-  second document, headless and in the GUI alike, with the file's pixels and not
-  the tab's, and no tool can switch back to the first. A numbered name like
-  `sheet1.png` beside `sheet2.png` loads a sequence (measured headless; a GUI
-  session may ask first, in a modal that would wedge the bridge, and that has
-  deliberately not been tried). `fsio.readPng` goes through a private copy for all
-  of these. `sprite.open` still calls `app.open` directly, so it has both problems.
+- **Don't call `app.open` on its own.** Reopening an open file makes a second
+  document, headless and in the GUI alike, with the file's pixels and not the
+  tab's. `sprite.open` looks for the tab first, and `fsio.readPng` goes through a
+  private copy. A numbered name like `sheet1.png` beside `sheet2.png` loads a
+  sequence (measured headless; `app.open` in a GUI session may ask first, in a modal
+  that would wedge the bridge, and that has deliberately not been tried), so
+  `fsio.openSprite` opens a PNG with `oneFrame = true`.
 - **Numbers from `json.decode` are floats**: `{"a":16}` decodes to `16.0`. Tests
   that call handlers directly with integers won't see this, so anything doing
   arithmetic on params needs a test through `sendRaw` as well.

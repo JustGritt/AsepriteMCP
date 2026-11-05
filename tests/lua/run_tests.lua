@@ -1298,6 +1298,106 @@ test("sprite.exportSheet refuses a block that does not fit", function()
   closeAbove(base)
 end)
 
+print("=== opening an open file ===")
+test("sprite.open switches to a tab that already holds the file", function()
+  local base = #app.sprites
+  local path = writeSheet("open_tab.png")
+  local first = call("sprite.open", { path = path })
+  check(first.alreadyOpen == nil, "the first open is a plain open")
+  local tab = app.sprite
+  local other = newSprite(4, 4)
+  local count = #app.sprites
+
+  local second = call("sprite.open", { path = path })
+  equals(#app.sprites, count, "no second document")
+  check(app.sprite == tab, "that tab is active again")
+  check(app.sprite ~= other, "and not the one in front before")
+  equals(second.alreadyOpen, true, "the reply says so")
+  check(second.unsaved == nil, "and has nothing unsaved to report")
+  closeAbove(base)
+end)
+
+test("sprite.open keeps a tab's unsaved edits and says they are there", function()
+  local base = #app.sprites
+  local path = writeSheet("open_unsaved.png")
+  call("sprite.open", { path = path })
+  call("draw.pixels", { pixels = { { x = 0, y = 0, color = "#010203ff" } } })
+  newSprite(4, 4)
+
+  local reply = call("sprite.open", { path = path })
+  equals(reply.unsaved, true, "the reply flags the edits")
+  equals(app.sprite.cels[1].image:getPixel(0, 0), rgba(1, 2, 3, 255), "the tab wins over the file")
+  closeAbove(base)
+end)
+
+test("sprite.open finds a tab however the path is spelled", function()
+  local base = #app.sprites
+  local path = writeSheet("open_spelled.png")
+  call("sprite.open", { path = path })
+  local tab = app.sprite
+  local count = #app.sprites
+  newSprite(4, 4)
+  count = count + 1
+
+  local slashes = path:gsub("\\", "/")
+  equals(call("sprite.open", { path = slashes }).alreadyOpen, true, "other slashes")
+  check(app.sprite == tab, "other slashes reach the tab")
+  newSprite(4, 4)
+  count = count + 1
+  local dotted = app.fs.joinPath(app.fs.filePath(path), "x", "..", app.fs.fileName(path))
+  equals(call("sprite.open", { path = dotted }).alreadyOpen, true, "a .. in the path")
+  check(app.sprite == tab, "a .. reaches the tab")
+  if app.os.windows then
+    newSprite(4, 4)
+    count = count + 1
+    equals(call("sprite.open", { path = path:upper() }).alreadyOpen, true, "other case on Windows")
+    check(app.sprite == tab, "other case reaches the tab")
+  end
+  equals(#app.sprites, count, "none of them made a second document")
+  closeAbove(base)
+end)
+
+test("sprite.open does not take an unsaved sprite's name for a file", function()
+  local base = #app.sprites
+  local unsaved = newSprite(4, 4)
+  local path = writeSheet("Sprite.png")
+  local reply = call("sprite.open", { path = path })
+  check(reply.alreadyOpen == nil, "a new document, not the sprite named Sprite")
+  check(app.sprite ~= unsaved, "and it is active")
+  closeAbove(base)
+end)
+
+test("sprite.open opens a numbered PNG by itself", function()
+  local base = #app.sprites
+  local first, second = tempPath("numbered1.png"), tempPath("numbered2.png")
+  sheetImage():saveAs(first)
+  sheetImage():saveAs(second)
+  local reply = call("sprite.open", { path = first })
+  equals(#reply.frameMs, 1, "one frame, not a sequence")
+  equals(reply.width, 6, "the file's width")
+  equals(app.fs.fileName(app.sprite.filename), app.fs.fileName(first), "under its own name")
+  check(reply.paletteSize > 1, "with the file's colors in the palette")
+  check(not app.sprite.isModified, "and nothing to save yet")
+  local pixels = Image(6, 4, ColorMode.RGB)
+  pixels:clear(rgba(0, 0, 0, 0))
+  pixels:drawSprite(app.sprite, 1)
+  check(pixels.bytes == sheetImage().bytes, "with the file's exact pixels")
+  closeAbove(base)
+end)
+
+test("sprite.open still loads every frame of a numbered .aseprite", function()
+  local base = #app.sprites
+  local first, second = tempPath("numbered1.aseprite"), tempPath("numbered2.aseprite")
+  for _, path in ipairs({ first, second }) do
+    local sprite = newSprite(4, 4)
+    sprite:newEmptyFrame()
+    sprite:saveAs(path)
+    sprite:close()
+  end
+  equals(#call("sprite.open", { path = first }).frameMs, 2, "its own two frames")
+  closeAbove(base)
+end)
+
 test("unknown command is rejected by name", function()
   check(dispatch["does.not.exist"] == nil, "unknown command is absent from the dispatch table")
 end)
@@ -1423,6 +1523,18 @@ test("a sheet error reads well over the wire path", function()
   })
   equals(reply.ok, false, "too many columns is refused")
   check(reply.error.message:find("At most 3 x 2", 1, true) ~= nil, "names what fits: " .. reply.error.message)
+  closeAbove(base)
+end)
+
+test("opening an open file survives the wire path", function()
+  local base = #app.sprites
+  local path = writeSheet("wire_open.png")
+  local first = sendCommand("sprite.open", { path = path })
+  equals(first.ok, true, "the first open works")
+  newSprite(4, 4)
+  local second = sendCommand("sprite.open", { path = path })
+  equals(second.ok, true, "the second open works")
+  equals(second.result.alreadyOpen, true, "and says it found the tab")
   closeAbove(base)
 end)
 

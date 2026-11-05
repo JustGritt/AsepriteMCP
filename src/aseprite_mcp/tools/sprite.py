@@ -94,8 +94,9 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         title="Open sprite",
         description=(
             "Open a .aseprite, .ase or .png file inside an allowed directory and make it "
-            "active. Relative paths resolve against the first allowed directory. "
-            "Replies with the same overview as get_sprite_info."
+            "active, or switch to its tab if it is already open. Relative paths resolve "
+            "against the first allowed directory. Replies with the same overview as "
+            "get_sprite_info."
         ),
     )
     async def open_sprite(path: str) -> str:

@@ -91,8 +91,14 @@ function M.saveSprite(sprite, path)
   return app.fs.isFile(path)
 end
 
---- Open a document.
+--- Open a document as a new tab.
+-- app.open on sheet1.png beside sheet2.png loads a sequence, and a GUI session
+-- could ask about that in a modal, which would wedge the bridge (see primeAccess).
+-- A PNG holds one frame anyway. A numbered .aseprite never loads as a sequence.
 function M.openSprite(path)
+  if app.fs.fileExtension(path):lower() == "png" then
+    return Sprite{ fromFile = path, oneFrame = true }
+  end
   return app.open(path)
 end
 
@@ -116,9 +122,6 @@ end
 -- This opens a private copy, not the file itself, because the file may already
 -- be open in a tab. A tab can hold unsaved edits, or be stale after an export
 -- wrote over its file, and closing it afterwards would close the user's work.
--- The copy's fixed name also ends in no digit: app.open on sheet1.png beside
--- sheet2.png loads a sequence, and a GUI session could ask about that in a modal,
--- which would wedge the bridge (see primeAccess).
 function M.readPng(path)
   local active = app.sprite
   local copy = app.fs.joinPath(app.fs.tempPath, "aseprite_mcp_sheet_source.png")

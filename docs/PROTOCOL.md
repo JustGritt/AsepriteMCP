@@ -126,6 +126,10 @@ with `sprite.info`, puts it through the sandbox and sends it back as
 `expectedPath`. Lua refuses with `INVALID_PARAMS` if the active document no longer
 has that path, since the user can switch tabs between the two commands.
 
+`sprite.open` looks for a tab already holding the file before opening anything. If
+it finds one, it switches to that tab and adds `alreadyOpen`, plus `unsaved` if the
+tab has edits, to the usual overview.
+
 `sprite.importSheet` and `sprite.exportSheet` take paths the server has already
 sandboxed, and read a PNG through `fsio.readPng`, which opens a private copy so no
 open tab is involved. `sprite.importSheet` replies with the `sprite.info` overview

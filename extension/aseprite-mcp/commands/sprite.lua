@@ -100,6 +100,23 @@ return function(deps)
     return overview(sprite)
   end
 
+  --- What two spellings of one path have in common. Windows ignores case.
+  local function fileKey(path)
+    local normal = app.fs.normalizePath(path)
+    return app.os.windows and normal:lower() or normal
+  end
+
+  --- The tab already holding this file, preferring the one in front.
+  local function openTab(path)
+    local key = fileKey(path)
+    local active = app.sprite
+    if active and fileKey(active.filename) == key then return active end
+    for _, sprite in ipairs(app.sprites) do
+      if fileKey(sprite.filename) == key then return sprite end
+    end
+    return nil
+  end
+
   M["sprite.open"] = function(params)
     local path = params.path
     if type(path) ~= "string" or path == "" then
@@ -109,17 +126,26 @@ return function(deps)
       proto.failf(proto.ERROR.INVALID_PARAMS, "No such file: %s", path)
     end
 
-    local sprite = fsio.openSprite(path)
+    -- Opening it again would make a second tab with the file's pixels, and the
+    -- agent would edit a different document from the one the user is looking at.
+    -- The tab wins over the file, because it may hold the user's unsaved work.
+    local tab = openTab(path)
+    local sprite = tab or fsio.openSprite(path)
     if not sprite then
       proto.failf(
         proto.ERROR.LUA_ERROR,
         "Aseprite could not open %s. It may be corrupt or in an unsupported format.", path
       )
     end
-    -- app.open usually activates the document already; make it explicit so the
+    -- Opening usually activates the document already; make it explicit so the
     -- next command cannot land on whatever was previously in front.
     pcall(function() app.sprite = sprite end)
-    return overview(sprite)
+    local reply = overview(sprite)
+    if tab then
+      reply.alreadyOpen = true
+      reply.unsaved = tab.isModified or nil
+    end
+    return reply
   end
 
   M["sprite.save"] = function(params)
