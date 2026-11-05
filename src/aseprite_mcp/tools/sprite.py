@@ -8,7 +8,7 @@ from typing import Literal
 from mcp.server.mcpserver import MCPServer
 
 from ..bridge.protocol import BridgeError, ErrorCode
-from ..paths import OPEN_SUFFIXES, SAVE_SUFFIXES, resolve_in_sandbox
+from ..paths import OPEN_SUFFIXES, SAVE_SUFFIXES, SHEET_SUFFIXES, canonical, resolve_in_sandbox
 from .base import ToolContext, as_json
 
 
@@ -36,6 +36,11 @@ async def _own_file(ctx: ToolContext) -> str:
             "Pass a path to save a .aseprite copy inside an allowed directory.",
         ) from exc
     return own_file
+
+
+def _check_origin(x: int, y: int) -> None:
+    if x < 0 or y < 0:
+        raise BridgeError(ErrorCode.INVALID_PARAMS, f"x and y must not be negative, got {x},{y}.")
 
 
 def register(mcp: MCPServer, ctx: ToolContext) -> None:
@@ -116,3 +121,94 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         else:
             params = {"expectedPath": await _own_file(ctx)}
         return as_json(await ctx.call("sprite.save", params, timeout=ctx.config.render_timeout))
+
+    @mcp.tool(
+        title="Import sprite sheet",
+        description=(
+            "Slice a PNG into a new unsaved sprite: one frame per cell, left to right then "
+            "top to bottom, from x,y to the sheet's edge unless columns or rows limit it. "
+            "Mixed frame sizes take one import per area. The PNG is not changed."
+        ),
+    )
+    async def import_spritesheet(
+        path: str,
+        frame_width: int,
+        frame_height: int,
+        x: int = 0,
+        y: int = 0,
+        columns: int | None = None,
+        rows: int | None = None,
+    ) -> str:
+        limit = ctx.config.max_sprite_size
+        if not (1 <= frame_width <= limit and 1 <= frame_height <= limit):
+            raise BridgeError(
+                ErrorCode.INVALID_PARAMS,
+                f"frame_width and frame_height must be 1-{limit}, "
+                f"got {frame_width}x{frame_height}.",
+            )
+        _check_origin(x, y)
+        if (columns is not None and columns < 1) or (rows is not None and rows < 1):
+            raise BridgeError(ErrorCode.INVALID_PARAMS, "columns and rows must be at least 1.")
+        resolved = resolve_in_sandbox(
+            path, ctx.config.allowed_dirs, suffixes=SHEET_SUFFIXES, must_exist=True
+        )
+        params: dict[str, object] = {
+            "path": str(resolved),
+            "frameWidth": frame_width,
+            "frameHeight": frame_height,
+            "x": x,
+            "y": y,
+        }
+        if columns is not None:
+            params["columns"] = columns
+        if rows is not None:
+            params["rows"] = rows
+        return as_json(
+            await ctx.call("sprite.importSheet", params, timeout=ctx.config.render_timeout)
+        )
+
+    @mcp.tool(
+        title="Export sprite sheet",
+        description=(
+            "Write visible layers of all frames, or one tag, as a grid to a new PNG, one row "
+            "unless columns is set. With onto, an existing PNG, replace only the cells at x,y "
+            "of a copy; path may equal onto to update it. The sprite is not changed."
+        ),
+    )
+    async def export_spritesheet(
+        path: str,
+        columns: int | None = None,
+        onto: str | None = None,
+        x: int = 0,
+        y: int = 0,
+        tag: str | None = None,
+    ) -> str:
+        if columns is not None and columns < 1:
+            raise BridgeError(ErrorCode.INVALID_PARAMS, "columns must be at least 1.")
+        _check_origin(x, y)
+        if (x or y) and not onto:
+            raise BridgeError(
+                ErrorCode.INVALID_PARAMS, "x and y place frames on an existing sheet: pass onto."
+            )
+        allowed = ctx.config.allowed_dirs
+        resolved = resolve_in_sandbox(path, allowed, suffixes=SHEET_SUFFIXES)
+        params: dict[str, object] = {"path": str(resolved)}
+        base = None
+        if onto:
+            base = resolve_in_sandbox(onto, allowed, suffixes=SHEET_SUFFIXES, must_exist=True)
+            params.update(onto=str(base), x=x, y=y)
+        # A PNG holds no layers to go back to, so replacing one takes a clear intent.
+        if resolved.exists() and (base is None or canonical(base) != canonical(resolved)):
+            raise BridgeError(
+                ErrorCode.INVALID_PARAMS,
+                f"{resolved.name} already exists. Choose another path, or pass onto with the "
+                "same path to update it.",
+            )
+        if columns is not None:
+            params["columns"] = columns
+        if tag:
+            params["tag"] = tag
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        return as_json(
+            await ctx.call("sprite.exportSheet", params, timeout=ctx.config.render_timeout)
+        )

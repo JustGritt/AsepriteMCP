@@ -137,7 +137,7 @@ All optional. The defaults work.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ASEPRITE_MCP_ALLOWED_DIRS` | `<repo>/sprites` | Directories `open_sprite` and `save_sprite` may touch, `;`-separated. Everything else is refused. |
+| `ASEPRITE_MCP_ALLOWED_DIRS` | `<repo>/sprites` | Directories the file tools (`open_sprite`, `save_sprite`, `import_spritesheet`, `export_spritesheet`) may touch, `;`-separated. Everything else is refused, including saving over a document you opened by hand from somewhere else. |
 | `ASEPRITE_MCP_PORT` | `32145` | Bridge port. Set it for **both** the server and Aseprite if you change it. On the Aseprite side a port typed into the connect dialog outranks this. |
 | `ASEPRITE_MCP_HOST` | `127.0.0.1` | Loopback only unless `ASEPRITE_MCP_ALLOW_NON_LOOPBACK=1`. Outranked by the connect dialog, same as the port. |
 | `ASEPRITE_MCP_TOKEN` | unset | Opt-in shared secret; set the same value in both environments. |

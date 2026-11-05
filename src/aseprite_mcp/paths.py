@@ -1,4 +1,4 @@
-"""Filesystem sandboxing for open_sprite / save_sprite.
+"""Filesystem sandboxing for the tools that read and write files.
 
 This is the security-critical module (docs/ASEPRITE_MCP.md section 21). Every
 path that reaches Aseprite from the agent goes through resolve_in_sandbox.
@@ -30,10 +30,14 @@ from .bridge.protocol import BridgeError, ErrorCode
 # Formats Aseprite can open as a document.
 OPEN_SUFFIXES = frozenset({".aseprite", ".ase", ".png"})
 
-# Formats we allow writing. Deliberately narrower than OPEN_SUFFIXES: the point
-# of the project is to deliver an editable .aseprite asset, and refusing to
-# write .png keeps the agent from flattening someone's layered source file.
+# Formats we allow saving a document to. Deliberately narrower than OPEN_SUFFIXES:
+# the point of the project is to deliver an editable .aseprite asset, and refusing
+# to save over a .png keeps the agent from flattening someone's layered source file.
 SAVE_SUFFIXES = frozenset({".aseprite", ".ase"})
+
+# What import_spritesheet reads and export_spritesheet writes. Export is the one
+# way to a PNG, and it leaves the document and its layers as they were.
+SHEET_SUFFIXES = frozenset({".png"})
 
 
 def canonical(path):

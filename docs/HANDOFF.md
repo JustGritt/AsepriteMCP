@@ -9,16 +9,17 @@ saves the most time.
 
 Phases 1–5 of [ASEPRITE_MCP.md](ASEPRITE_MCP.md) are built and verified end to
 end, and the connect dialog that replaced the old menu entries is in.
-**39 MCP tools** drive a live Aseprite session over a loopback WebSocket, on top
-of 39 Lua commands. The mapping is not 1:1: `app.status` and `fs.probe` are called
+**41 MCP tools** drive a live Aseprite session over a loopback WebSocket, on top
+of 41 Lua commands. The mapping is not 1:1: `app.status` and `fs.probe` are called
 by the server rather than exposed, and `draw_rows` / `draw_rect` are decoded into
 `draw.pixels` server-side. Token-cost work is tracked in GitHub issue #10.
 
 | | |
 | --- | --- |
-| Python tests | 301 passing |
-| Lua assertions | 338 passing, against the real engine |
+| Python tests | 330 passing |
+| Lua assertions | 436 passing, against the real engine |
 | End-to-end | 34/34 spec §29 workflow, from the session that landed `593bf03` |
+| Sprite sheets | A real 64x352 sheet with three frame sizes rebuilt in the live app, area by area: 0 raw RGBA differences, on 1.3.18.6 |
 | Aseprite | 1.3.18.3, `apiVersion` 41, Steam build |
 
 ```powershell
@@ -204,6 +205,26 @@ in the code as well; this is the index.
   Convert only at the Lua boundary.
 - **`image:resize` has no nearest-neighbour mode.** Bilinear blurs every preview
   and destroys the visual loop. `render.lua` upscales by row blit instead.
+- **`image:drawImage` blends by default.** A transparent source pixel leaves the
+  destination as it was, and alpha 105 comes out as a mix at alpha 255. To replace
+  pixels, pass `255, BlendMode.SRC`. `render.crop` gets away with the default only
+  because it draws onto a cleared image.
+- **`app.open` is not a safe way to read a file.** Reopening an open file makes a
+  second document, headless and in the GUI alike, with the file's pixels and not
+  the tab's, and no tool can switch back to the first. A numbered name like
+  `sheet1.png` beside `sheet2.png` loads a sequence (measured headless; a GUI
+  session may ask first, in a modal that would wedge the bridge, and that has
+  deliberately not been tried). `fsio.readPng` goes through a private copy for all
+  of these. `sprite.open` still calls `app.open` directly, so it has both problems.
+- **Numbers from `json.decode` are floats**: `{"a":16}` decodes to `16.0`. Tests
+  that call handlers directly with integers won't see this, so anything doing
+  arithmetic on params needs a test through `sendRaw` as well.
+- **A sprite that was never saved reports `filename == "Sprite"`, not `""`.** Test
+  for an absolute path, not for an empty string.
+- **`ImportSpriteSheet` on an opened PNG keeps the PNG's filename** and runs to the
+  bottom of the sheet. Saving the result with no path writes `sheet1.png`,
+  `sheet2.png` and so on beside the original, which is why `sprite.importSheet`
+  builds a new document by hand.
 - **`Dialog{}` returns `nil` under `-b`.** Guard on `app.isUIAvailable` *and* on
   the constructor's return, or it fails later and elsewhere, at the first
   `dlg:label{}`.
