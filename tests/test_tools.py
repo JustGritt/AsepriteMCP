@@ -189,6 +189,157 @@ class TestSprite:
         assert "PATH_NOT_ALLOWED" in await err(mcp, "save_sprite", path="flat.png")
 
 
+# ------------------------------------------------------------------- sprite sheets
+
+
+class TestImportSpritesheet:
+    async def test_sends_only_what_was_chosen(self, server, aseprite, sandbox):
+        mcp, _ = server
+        (sandbox / "sheet.png").write_bytes(b"")
+        await ok(mcp, "import_spritesheet", path="sheet.png", frame_width=16, frame_height=32)
+        assert aseprite.last("sprite.importSheet")["params"] == {
+            "path": str(sandbox / "sheet.png"),
+            "frameWidth": 16,
+            "frameHeight": 32,
+            "x": 0,
+            "y": 0,
+        }
+
+    async def test_sends_an_area(self, server, aseprite, sandbox):
+        mcp, _ = server
+        (sandbox / "sheet.png").write_bytes(b"")
+        await ok(
+            mcp, "import_spritesheet", path="sheet.png", frame_width=32, frame_height=48,
+            x=0, y=192, columns=2, rows=3,
+        )
+        params = aseprite.last("sprite.importSheet")["params"]
+        assert (params["y"], params["columns"], params["rows"]) == (192, 2, 3)
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"frame_width": 0}, {"frame_height": 0}, {"frame_width": 1025},
+            {"x": -1}, {"y": -1}, {"columns": 0}, {"rows": 0},
+        ],
+    )
+    async def test_rejects_bad_numbers(self, server, aseprite, sandbox, bad):
+        mcp, _ = server
+        (sandbox / "sheet.png").write_bytes(b"")
+        arguments = {"path": "sheet.png", "frame_width": 16, "frame_height": 32, **bad}
+        assert "INVALID_PARAMS" in await err(mcp, "import_spritesheet", **arguments)
+        assert not aseprite.requests
+
+    async def test_stays_in_the_sandbox(self, server, aseprite, tmp_path):
+        mcp, _ = server
+        (tmp_path / "outside.png").write_bytes(b"")
+        message = await err(
+            mcp, "import_spritesheet", path=str(tmp_path / "outside.png"),
+            frame_width=16, frame_height=32,
+        )
+        assert "PATH_NOT_ALLOWED" in message
+        assert not aseprite.requests
+
+    async def test_only_reads_png(self, server, aseprite, sandbox):
+        mcp, _ = server
+        (sandbox / "hero.aseprite").write_bytes(b"")
+        assert "PATH_NOT_ALLOWED" in await err(
+            mcp, "import_spritesheet", path="hero.aseprite", frame_width=16, frame_height=32
+        )
+
+    async def test_needs_the_file(self, server, aseprite):
+        mcp, _ = server
+        assert "INVALID_PARAMS" in await err(
+            mcp, "import_spritesheet", path="ghost.png", frame_width=16, frame_height=32
+        )
+
+
+class TestExportSpritesheet:
+    async def test_writes_a_new_png(self, server, aseprite, sandbox):
+        mcp, _ = server
+        await ok(mcp, "export_spritesheet", path="out/sheet.png", columns=4)
+        assert (sandbox / "out").is_dir(), "parent directory is created for Aseprite to write into"
+        assert aseprite.last("sprite.exportSheet")["params"] == {
+            "path": str(sandbox / "out" / "sheet.png"),
+            "columns": 4,
+        }
+
+    async def test_sends_a_tag(self, server, aseprite):
+        mcp, _ = server
+        await ok(mcp, "export_spritesheet", path="walk.png", tag="walk")
+        assert aseprite.last("sprite.exportSheet")["params"]["tag"] == "walk"
+
+    async def test_never_replaces_a_file_by_accident(self, server, aseprite, sandbox):
+        mcp, _ = server
+        (sandbox / "sheet.png").write_bytes(b"work")
+        message = await err(mcp, "export_spritesheet", path="sheet.png")
+        assert "already exists" in message
+        assert "onto" in message
+        assert not aseprite.requests
+
+    async def test_onto_a_different_file_still_needs_a_new_path(self, server, aseprite, sandbox):
+        mcp, _ = server
+        (sandbox / "sheet.png").write_bytes(b"work")
+        (sandbox / "other.png").write_bytes(b"work")
+        assert "already exists" in await err(
+            mcp, "export_spritesheet", path="other.png", onto="sheet.png"
+        )
+        assert not aseprite.requests
+
+    async def test_onto_the_same_file_updates_it(self, server, aseprite, sandbox):
+        mcp, _ = server
+        (sandbox / "sheet.png").write_bytes(b"work")
+        # Spelled differently on purpose: it is the same file once resolved.
+        await ok(mcp, "export_spritesheet", path="sub/../sheet.png", onto="sheet.png", x=16, y=32)
+        params = aseprite.last("sprite.exportSheet")["params"]
+        assert (params["x"], params["y"]) == (16, 32)
+        assert params["path"] == params["onto"] == str(sandbox / "sheet.png")
+
+    async def test_onto_writes_to_a_new_path(self, server, aseprite, sandbox):
+        mcp, _ = server
+        (sandbox / "sheet.png").write_bytes(b"work")
+        await ok(mcp, "export_spritesheet", path="new.png", onto="sheet.png")
+        params = aseprite.last("sprite.exportSheet")["params"]
+        assert params["path"] == str(sandbox / "new.png")
+        assert params["onto"] == str(sandbox / "sheet.png")
+
+    async def test_only_writes_png(self, server, aseprite):
+        mcp, _ = server
+        assert "PATH_NOT_ALLOWED" in await err(mcp, "export_spritesheet", path="flat.aseprite")
+        assert not aseprite.requests
+
+    async def test_stays_in_the_sandbox(self, server, aseprite, sandbox, tmp_path):
+        mcp, _ = server
+        (tmp_path / "outside.png").write_bytes(b"")
+        assert "PATH_NOT_ALLOWED" in await err(
+            mcp, "export_spritesheet", path=str(tmp_path / "new.png")
+        )
+        assert "PATH_NOT_ALLOWED" in await err(
+            mcp, "export_spritesheet", path="new.png", onto=str(tmp_path / "outside.png")
+        )
+        assert not aseprite.requests
+
+    async def test_onto_must_exist(self, server, aseprite):
+        mcp, _ = server
+        assert "INVALID_PARAMS" in await err(
+            mcp, "export_spritesheet", path="new.png", onto="ghost.png"
+        )
+
+    @pytest.mark.parametrize("bad", [{"columns": 0}, {"x": 1}, {"y": 1}])
+    async def test_rejects_bad_layout(self, server, aseprite, bad):
+        # x and y place a block on an existing sheet, so without onto they mean nothing.
+        mcp, _ = server
+        assert "INVALID_PARAMS" in await err(mcp, "export_spritesheet", path="new.png", **bad)
+        assert not aseprite.requests
+
+    async def test_rejects_a_negative_origin(self, server, aseprite, sandbox):
+        mcp, _ = server
+        (sandbox / "sheet.png").write_bytes(b"work")
+        assert "INVALID_PARAMS" in await err(
+            mcp, "export_spritesheet", path="new.png", onto="sheet.png", x=-1
+        )
+        assert not aseprite.requests
+
+
 # ------------------------------------------------------------------------- layers
 
 
@@ -890,6 +1041,8 @@ MINIMAL_ARGUMENTS = {
     "new_sprite": {"width": 8, "height": 8},
     "open_sprite": {"path": "fixture.aseprite"},
     "save_sprite": {"path": "fixture.aseprite"},
+    "import_spritesheet": {"path": "fixture.png", "frame_width": 8, "frame_height": 8},
+    "export_spritesheet": {"path": "new_sheet.png"},
     "select_layer": {"layer": "Character"},
     "create_layer": {"name": "New"},
     "delete_layer": {"layer": "Character"},
@@ -942,6 +1095,7 @@ async def test_tool_smoke(server, aseprite, sandbox, name):
     """Every tool completes against a cooperative extension."""
     mcp, _ = server
     (sandbox / "fixture.aseprite").write_bytes(b"")
+    (sandbox / "fixture.png").write_bytes(b"")
     await ok(mcp, name, **MINIMAL_ARGUMENTS[name])
 
 
@@ -953,6 +1107,7 @@ async def test_tools_report_disconnection(server, sandbox, name):
     """
     mcp, _ = server
     (sandbox / "fixture.aseprite").write_bytes(b"")
+    (sandbox / "fixture.png").write_bytes(b"")
     if name == "get_connection_status":
         result = await mcp.call_tool(name, MINIMAL_ARGUMENTS[name])
         assert not result.is_error

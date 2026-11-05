@@ -167,6 +167,9 @@ image, which it did before anyway. See `ToolContext.image_or_note`.
   *components*, so `sprites-evil` cannot pass as `sprites`. See `paths.py`.
 - A save with no path goes through the same check, using the document's own file,
   and Lua refuses if the active tab changed after that check.
+- `export_spritesheet` is the only way to write a PNG. It writes a flattened copy
+  and leaves the document alone, and it won't replace an existing PNG unless `onto`
+  names that same file.
 - No `run_lua`, no shell, no arbitrary deletion. Deleting layers, frames and cels
   is fine: it is contained in the document and undoable.
 - Batch and region caps stop one call from stalling the editor or flooding the

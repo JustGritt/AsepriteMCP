@@ -978,6 +978,326 @@ test("sprite.save with expectedPath only saves that document", function()
   sprite:close()
 end)
 
+print("=== sprite sheets ===")
+local rgba = app.pixelColor.rgba
+local fsio = core.fsio
+
+-- A 3x2 grid of 2x2 cells. Every cell has its own color, except the empty one at
+-- column 1, row 1, and a partly transparent pixel in the first cell of column 2.
+local PARTIAL = rgba(200, 100, 50, 105)
+local function cellColor(col, row) return rgba(10 * (col + 1), 20 * (row + 1), 30, 255) end
+
+local function sheetImage()
+  local image = Image(6, 4, ColorMode.RGB)
+  image:clear(rgba(0, 0, 0, 0))
+  for row = 0, 1 do
+    for col = 0, 2 do
+      if not (col == 1 and row == 1) then
+        for y = 0, 1 do
+          for x = 0, 1 do image:drawPixel(col * 2 + x, row * 2 + y, cellColor(col, row)) end
+        end
+      end
+    end
+  end
+  image:drawPixel(4, 0, PARTIAL)
+  return image
+end
+
+local function writeSheet(name)
+  local path = tempPath(name)
+  sheetImage():saveAs(path)
+  return path
+end
+
+--- Close every document a test opened, so the next one starts clean.
+local function closeAbove(count)
+  while #app.sprites > count do app.sprites[#app.sprites]:close() end
+end
+
+test("fsio.readPng reads the disk and leaves open tabs alone", function()
+  local path = writeSheet("sheet_tab.png")
+  local base = #app.sprites
+  local tab = app.open(path)
+  local unsaved = rgba(1, 2, 3, 255)
+  tab.cels[1].image:drawPixel(0, 0, unsaved)
+  local other = newSprite(4, 4)
+  local count = #app.sprites
+
+  local image = fsio.readPng(path)
+  equals(#app.sprites, count, "no document left behind, none closed")
+  check(app.sprite == other, "the active document is unchanged")
+  equals(image:getPixel(0, 0), cellColor(0, 0), "reads the file, not the tab's unsaved edit")
+  equals(tab.cels[1].image:getPixel(0, 0), unsaved, "the tab keeps its edit")
+
+  app.sprite = tab
+  local again = fsio.readPng(path)
+  check(again ~= nil, "also works when that tab is the active one")
+  check(app.sprite == tab, "and that tab stays active")
+  closeAbove(base)
+end)
+
+test("fsio.readPng reports what it cannot read", function()
+  local image, why = fsio.readPng(tempPath("does_not_exist.png"))
+  check(image == nil, "no image")
+  check(type(why) == "string", "a reason")
+end)
+
+test("sprite.importSheet slices a sheet into a new document", function()
+  local path = writeSheet("sheet_import.png")
+  local bytes = fileBytes(path)
+  local base = #app.sprites
+  local before = newSprite(4, 4)
+  local result = call("sprite.importSheet", { path = path, frameWidth = 2, frameHeight = 2 })
+
+  equals(#result.frameMs, 6, "one frame per cell")
+  equals(result.width, 2, "frame width")
+  equals(result.height, 2, "frame height")
+  equals(result.colorMode, "rgb", "rgb document")
+  equals(result.activeFrame, 1, "starts on the first frame")
+  equals(result.sheet.columns, 3, "columns run to the edge")
+  equals(result.sheet.rows, 2, "rows run to the edge")
+  equals(#result.sheet.emptyFrames, 1, "one empty cell")
+  equals(result.sheet.emptyFrames[1], 5, "the empty cell keeps its place in the order")
+  check(result.warning == nil, "an even grid gets no warning")
+
+  local sprite = app.sprite
+  check(sprite ~= before, "a new document is active")
+  check(not app.fs.isFile(sprite.filename), "it has no file, so a save cannot land on the PNG")
+  check(fileBytes(path) == bytes, "the PNG is not touched")
+  check(#sprite.palettes[1] > 1, "the palette holds the sheet's colors")
+
+  local layer = sprite.layers[1]
+  equals(layer:cel(1).image:getPixel(0, 0), cellColor(0, 0), "frame 1 is column 0, row 0")
+  equals(layer:cel(2).image:getPixel(0, 0), cellColor(1, 0), "frame 2 is column 1, row 0")
+  equals(layer:cel(4).image:getPixel(0, 0), cellColor(0, 1), "frame 4 starts the next row")
+  check(layer:cel(5) == nil, "the empty cell has no cel")
+  equals(layer:cel(3).image:getPixel(0, 0), PARTIAL, "partial alpha arrives exactly")
+  closeAbove(base)
+end)
+
+test("sprite.importSheet is one undo step", function()
+  local path = writeSheet("sheet_undo.png")
+  local base = #app.sprites
+  call("sprite.importSheet", { path = path, frameWidth = 2, frameHeight = 2 })
+  call("history.undo")
+  equals(#app.sprite.frames, 1, "one undo takes it all back")
+  call("history.redo")
+  equals(#app.sprite.frames, 6, "one redo restores it")
+  closeAbove(base)
+end)
+
+test("sprite.importSheet takes one area of a sheet", function()
+  local path = writeSheet("sheet_area.png")
+  local base = #app.sprites
+  local result = call("sprite.importSheet", {
+    path = path, frameWidth = 2, frameHeight = 2, x = 2, y = 2, columns = 2, rows = 1,
+  })
+  equals(#result.frameMs, 2, "only the cells asked for")
+  equals(app.sprite.layers[1]:cel(2).image:getPixel(0, 0), cellColor(2, 1), "offset from x,y")
+  equals(#result.sheet.emptyFrames, 1, "the empty cell is reported")
+  closeAbove(base)
+end)
+
+test("sprite.importSheet refuses what does not fit, without leaving a document", function()
+  local path = writeSheet("sheet_nofit.png")
+  local count = #app.sprites
+  expectError("sprite.importSheet", { path = path, frameWidth = 2, frameHeight = 2, rows = 3 },
+    "INVALID_PARAMS", "too many rows")
+  expectError("sprite.importSheet", { path = path, frameWidth = 2, frameHeight = 2, columns = 4 },
+    "INVALID_PARAMS", "too many columns")
+  expectError("sprite.importSheet", { path = path, frameWidth = 7, frameHeight = 2 },
+    "INVALID_PARAMS", "a frame wider than the sheet")
+  expectError("sprite.importSheet", { path = path, frameWidth = 2, frameHeight = 2, x = 6 },
+    "INVALID_PARAMS", "an origin past the edge")
+  local big = tempPath("sheet_big.png")
+  Image(64, 64, ColorMode.RGB):saveAs(big)
+  expectError("sprite.importSheet", { path = big, frameWidth = 1, frameHeight = 1 },
+    "INVALID_PARAMS", "more frames than any real sheet has")
+  expectError("sprite.importSheet", { path = tempPath("missing_sheet.png"), frameWidth = 2,
+    frameHeight = 2 }, "LUA_ERROR", "an unreadable file")
+  equals(#app.sprites, count, "no document left behind")
+end)
+
+test("sprite.importSheet warns when frames do not divide the sheet", function()
+  local path = writeSheet("sheet_uneven.png")
+  local base = #app.sprites
+  local uneven = call("sprite.importSheet", { path = path, frameWidth = 4, frameHeight = 3 })
+  check(type(uneven.warning) == "string", "left-over pixels are flagged")
+  local asked = call("sprite.importSheet", {
+    path = path, frameWidth = 4, frameHeight = 3, columns = 1, rows = 1,
+  })
+  check(asked.warning == nil, "not when columns and rows were chosen on purpose")
+  closeAbove(base)
+end)
+
+test("sprite.importSheet reads an indexed PNG as colors", function()
+  local path = tempPath("sheet_indexed.png")
+  local base = #app.sprites
+  local indexed = newSprite(2, 1, ColorMode.INDEXED)
+  local palette = Palette(2)
+  palette:setColor(0, Color{ r = 0, g = 0, b = 0, a = 0 })
+  palette:setColor(1, Color{ r = 255, g = 0, b = 0 })
+  indexed:setPalette(palette)
+  indexed.cels[1].image:drawPixel(1, 0, 1)
+  indexed:saveAs(path)
+  indexed:close()
+
+  local result = call("sprite.importSheet", { path = path, frameWidth = 2, frameHeight = 1 })
+  equals(result.colorMode, "rgb", "the new document is rgb")
+  local image = app.sprite.layers[1]:cel(1).image
+  equals(image:getPixel(0, 0), rgba(0, 0, 0, 0), "the transparent index stays transparent")
+  equals(image:getPixel(1, 0), rgba(255, 0, 0, 255), "the color index becomes its color")
+  closeAbove(base)
+end)
+
+test("sprite.exportSheet round-trips a sheet exactly", function()
+  local path = writeSheet("sheet_trip.png")
+  local out = tempPath("sheet_trip_out.png")
+  local base = #app.sprites
+  call("sprite.importSheet", { path = path, frameWidth = 2, frameHeight = 2 })
+  local result = call("sprite.exportSheet", { path = out, columns = 3 })
+  equals(result.width, 6, "width")
+  equals(result.height, 4, "height")
+  equals(result.frames, 6, "frames")
+  equals(result.rows, 2, "rows")
+  check(result.changedPixels == nil, "nothing to compare against without onto")
+  check(fsio.readPng(out).bytes == sheetImage().bytes, "every pixel matches, alpha included")
+  closeAbove(base)
+end)
+
+test("sprite.exportSheet defaults to one row", function()
+  local path = writeSheet("sheet_strip.png")
+  local out = tempPath("sheet_strip_out.png")
+  local base = #app.sprites
+  call("sprite.importSheet", { path = path, frameWidth = 2, frameHeight = 2 })
+  local result = call("sprite.exportSheet", { path = out })
+  equals(result.columns, 6, "one column per frame")
+  equals(result.width, 12, "strip width")
+  equals(result.height, 2, "strip height")
+  closeAbove(base)
+end)
+
+test("sprite.exportSheet leaves hidden layers out and the document alone", function()
+  local path = writeSheet("sheet_hidden.png")
+  local saved = tempPath("sheet_hidden.aseprite")
+  local out = tempPath("sheet_hidden_out.png")
+  local base = #app.sprites
+  call("sprite.importSheet", { path = path, frameWidth = 2, frameHeight = 2 })
+  local sprite = app.sprite
+  local reference = sprite:newLayer()
+  reference.name = "reference"
+  local solid = Image(2, 2, ColorMode.RGB)
+  solid:clear(rgba(0, 255, 0, 255))
+  for frame = 1, 6 do sprite:newCel(reference, frame, solid, Point(0, 0)) end
+  reference.isVisible = false
+  call("sprite.save", { path = saved })
+
+  call("sprite.exportSheet", { path = out, columns = 3 })
+  check(fsio.readPng(out).bytes == sheetImage().bytes, "the hidden layer is not in the PNG")
+  equals(sprite.filename, saved, "the document keeps its own file")
+  check(not sprite.isModified, "exporting does not mark it modified")
+  equals(#sprite.layers, 2, "layers stay separate")
+  closeAbove(base)
+end)
+
+test("sprite.exportSheet takes one tag", function()
+  local path = writeSheet("sheet_tag.png")
+  local out = tempPath("sheet_tag_out.png")
+  local base = #app.sprites
+  call("sprite.importSheet", { path = path, frameWidth = 2, frameHeight = 2 })
+  local tag = app.sprite:newTag(2, 3)
+  tag.name = "pair"
+  local result = call("sprite.exportSheet", { path = out, tag = "pair", columns = 2 })
+  equals(result.frames, 2, "only the tag's frames")
+  equals(result.width, 4, "width")
+  local image = fsio.readPng(out)
+  equals(image:getPixel(0, 0), cellColor(1, 0), "starts at the tag's first frame")
+  expectError("sprite.exportSheet", { path = out, tag = "nope" }, "INVALID_PARAMS",
+    "an unknown tag is refused")
+  closeAbove(base)
+end)
+
+test("sprite.exportSheet onto replaces its cells and nothing else", function()
+  local base = #app.sprites
+  local sheet = writeSheet("sheet_onto.png")
+  local out = tempPath("sheet_onto_out.png")
+  local bytes = fileBytes(sheet)
+
+  -- Mostly transparent on purpose: pasting must erase what was there, and a
+  -- partly transparent pixel must land exactly rather than blend with it.
+  local patch = newSprite(2, 2)
+  patch.cels[1].image:drawPixel(1, 1, PARTIAL)
+
+  local result = call("sprite.exportSheet", { path = out, onto = sheet, x = 2, y = 0 })
+  equals(result.width, 6, "keeps the sheet's width")
+  equals(result.height, 4, "keeps the sheet's height")
+  equals(result.changedPixels, 4, "reports what changed")
+  check(fileBytes(sheet) == bytes, "the sheet it started from is not touched")
+
+  local expected = sheetImage()
+  for y = 0, 1 do
+    for x = 2, 3 do expected:drawPixel(x, y, rgba(0, 0, 0, 0)) end
+  end
+  expected:drawPixel(3, 1, PARTIAL)
+  check(fsio.readPng(out).bytes == expected.bytes, "only that cell differs, and exactly")
+  closeAbove(base)
+end)
+
+test("sprite.exportSheet onto leaves cells past the last frame alone", function()
+  local base = #app.sprites
+  local sheet = writeSheet("sheet_partial.png")
+  local out = tempPath("sheet_partial_out.png")
+  -- Columns 1 and 2: the sheet's own empty cell is frame 3, a filled one frame 4.
+  -- A sheet can hold something in a cell that belongs to another grid, and
+  -- dropping frame 4 has to mean that cell stays as it is.
+  call("sprite.importSheet", {
+    path = sheet, frameWidth = 2, frameHeight = 2, x = 2, columns = 2, rows = 2,
+  })
+  call("frame.delete", { frame = 4 })
+  local sprite = app.sprite
+  local solid = Image(2, 2, ColorMode.RGB)
+  solid:clear(rgba(9, 9, 9, 255))
+  for frame = 1, 3 do sprite:newCel(sprite.layers[1], frame, solid, Point(0, 0)) end
+
+  local result = call("sprite.exportSheet", { path = out, onto = sheet, x = 2, columns = 2 })
+  equals(result.rows, 2, "three frames in two columns take two rows")
+  local image = fsio.readPng(out)
+  equals(image:getPixel(2, 0), rgba(9, 9, 9, 255), "the first frame landed")
+  equals(image:getPixel(4, 0), rgba(9, 9, 9, 255), "the second frame landed")
+  equals(image:getPixel(2, 2), rgba(9, 9, 9, 255), "the third frame landed")
+  equals(image:getPixel(4, 2), cellColor(2, 1), "the fourth cell kept what it had")
+  equals(image:getPixel(0, 0), cellColor(0, 0), "a cell outside the block is untouched")
+  closeAbove(base)
+end)
+
+test("sprite.exportSheet onto can update a file in place", function()
+  local base = #app.sprites
+  local sheet = writeSheet("sheet_inplace.png")
+  local patch = newSprite(2, 2)
+  patch.cels[1].image:clear(rgba(7, 7, 7, 255))
+  equals(call("sprite.exportSheet", { path = sheet, onto = sheet }).changedPixels, 4,
+    "the first paste changes the cell")
+  equals(call("sprite.exportSheet", { path = sheet, onto = sheet }).changedPixels, 0,
+    "pasting the same cell again changes nothing")
+  equals(fsio.readPng(sheet):getPixel(0, 0), rgba(7, 7, 7, 255), "the file holds the new cell")
+  closeAbove(base)
+end)
+
+test("sprite.exportSheet refuses a block that does not fit", function()
+  local base = #app.sprites
+  local sheet = writeSheet("sheet_tight.png")
+  local out = tempPath("sheet_tight_out.png")
+  newSprite(2, 2)
+  expectError("sprite.exportSheet", { path = out, onto = sheet, x = 5 }, "INVALID_PARAMS",
+    "past the right edge")
+  expectError("sprite.exportSheet", { path = out, onto = sheet, y = 3 }, "INVALID_PARAMS",
+    "past the bottom edge")
+  expectError("sprite.exportSheet", { path = out, columns = 0 }, "INVALID_PARAMS",
+    "columns must be positive")
+  check(not app.fs.isFile(out), "nothing was written")
+  closeAbove(base)
+end)
+
 test("unknown command is rejected by name", function()
   check(dispatch["does.not.exist"] == nil, "unknown command is absent from the dispatch table")
 end)
@@ -1045,6 +1365,75 @@ test("a raw request with array params survives decoding", function()
       .. '{"x":2,"y":2,"color":"#ff0000ff"}]}}')
   equals(reply.ok, true, "draw.pixels accepted a decoded array")
   equals(reply.result.written, 2, "both pixels written")
+  sprite:close()
+end)
+
+--- A command as the socket delivers it. Numbers decode to floats there, which a
+--- direct handler call with integers never shows.
+local function sendCommand(command, params)
+  return sendRaw(json.encode({ id = 20, command = command, params = params }))
+end
+
+test("sprite sheets survive the wire path", function()
+  local base = #app.sprites
+  local sheet = writeSheet("wire_sheet.png")
+  local out = tempPath("wire_out.png")
+
+  local imported = sendCommand("sprite.importSheet", {
+    path = sheet, frameWidth = 2, frameHeight = 2, x = 0, y = 0,
+  })
+  equals(imported.ok, true, "import accepted decoded params")
+  equals(#imported.result.frameMs, 6, "one frame per cell")
+  equals(imported.result.sheet.columns, 3, "columns")
+  equals(imported.result.sheet.emptyFrames[1], 5, "the empty cell")
+  equals(app.sprite.layers[1]:cel(6).image:getPixel(0, 0), cellColor(2, 1), "the last cell")
+
+  local exported = sendCommand("sprite.exportSheet", { path = out, columns = 3 })
+  equals(exported.ok, true, "export accepted decoded params")
+  equals(exported.result.rows, 2, "rows")
+  check(fsio.readPng(out).bytes == sheetImage().bytes, "the round trip is exact")
+
+  local pasted = sendCommand("sprite.exportSheet", {
+    path = out, onto = out, columns = 3, x = 0, y = 0,
+  })
+  equals(pasted.ok, true, "export onto accepted decoded params")
+  equals(pasted.result.changedPixels, 0, "pasting the same frames changes nothing")
+
+  local area = sendCommand("sprite.importSheet", {
+    path = sheet, frameWidth = 2, frameHeight = 2, x = 2, y = 2, columns = 2, rows = 1,
+  })
+  equals(area.ok, true, "an area accepted decoded params")
+  equals(#area.result.frameMs, 2, "only that area")
+  equals(app.sprite.layers[1]:cel(2).image:getPixel(0, 0), cellColor(2, 1), "offset from x,y")
+
+  local pastedArea = sendCommand("sprite.exportSheet", {
+    path = out, onto = sheet, columns = 2, x = 2, y = 2,
+  })
+  equals(pastedArea.ok, true, "a block at x,y accepted decoded params")
+  equals(pastedArea.result.changedPixels, 0, "and landed on its own cells")
+  closeAbove(base)
+end)
+
+test("a sheet error reads well over the wire path", function()
+  -- %d in these messages takes decoded numbers, which are floats.
+  local base = #app.sprites
+  local sheet = writeSheet("wire_nofit.png")
+  local reply = sendCommand("sprite.importSheet", {
+    path = sheet, frameWidth = 2, frameHeight = 2, columns = 9,
+  })
+  equals(reply.ok, false, "too many columns is refused")
+  check(reply.error.message:find("At most 3 x 2", 1, true) ~= nil, "names what fits: " .. reply.error.message)
+  closeAbove(base)
+end)
+
+test("a pathless save survives the wire path", function()
+  local out = tempPath("wire_expected.aseprite")
+  local sprite = newSprite(8, 8)
+  call("sprite.save", { path = out })
+  local own = sprite.filename
+  local reply = sendCommand("sprite.save", { expectedPath = own })
+  equals(reply.ok, true, "a matching expectedPath saves")
+  equals(reply.result.savedTo, own, "to the document's own file")
   sprite:close()
 end)
 

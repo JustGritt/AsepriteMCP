@@ -96,4 +96,47 @@ function M.openSprite(path)
   return app.open(path)
 end
 
+--- Copy a file byte for byte, or return false plus a reason.
+local function copyFile(from, to)
+  local source, err = io.open(from, "rb")
+  if not source then return false, tostring(err) end
+  local data = source:read("a")
+  source:close()
+  local target
+  target, err = io.open(to, "wb")
+  if not target then return false, tostring(err) end
+  target:write(data)
+  target:close()
+  return true
+end
+
+--- A PNG's pixels as they are on disk, as an RGB image, with its palette.
+-- Returns nil plus a reason on failure.
+--
+-- This opens a private copy, not the file itself, because the file may already
+-- be open in a tab. A tab can hold unsaved edits, or be stale after an export
+-- wrote over its file, and closing it afterwards would close the user's work.
+-- The copy's fixed name also ends in no digit: app.open on sheet1.png beside
+-- sheet2.png loads a sequence, and a GUI session could ask about that in a modal,
+-- which would wedge the bridge (see primeAccess).
+function M.readPng(path)
+  local active = app.sprite
+  local copy = app.fs.joinPath(app.fs.tempPath, "aseprite_mcp_sheet_source.png")
+  local copied, why = copyFile(path, copy)
+  if not copied then return nil, why end
+
+  local opened, sprite = pcall(M.openSprite, copy)
+  M.remove(copy)
+  if not opened or not sprite then return nil, "Aseprite could not decode it as a PNG." end
+
+  -- Drawing through the document handles every PNG flavour, indexed included.
+  local image = Image(sprite.width, sprite.height, ColorMode.RGB)
+  image:clear(app.pixelColor.rgba(0, 0, 0, 0))
+  image:drawSprite(sprite, 1)
+  local palette = Palette(sprite.palettes[1])
+  sprite:close()
+  if active then pcall(function() app.sprite = active end) end
+  return image, palette
+end
+
 return M

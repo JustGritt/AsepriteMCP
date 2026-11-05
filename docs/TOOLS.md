@@ -1,8 +1,9 @@
 # Tool reference
 
-39 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
+41 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
 its place only if it helps the agent understand, modify, inspect or safely
-preserve the sprite.
+preserve the sprite. The sheet tools take it one past that range, because nothing
+else gets a game's sprite sheet in as frames or back out as a PNG.
 
 Every tool returns compact JSON as text: no indentation and no `null` fields,
 because the model reads every byte and each reply stays in its context. Preview
@@ -79,6 +80,53 @@ never be flattened to PNG by accident. The active document can be anything the
 user opened by hand, so its own file gets the same check as a path the agent
 names: a document from a `.png` or from outside the sandbox is refused until a
 `path` gives it a new home. A sprite that was never saved needs a `path` too.
+
+### `import_spritesheet(path, frame_width, frame_height, x=0, y=0, columns=None, rows=None)`
+Slices a `.png` inside an allowed directory into a new RGB sprite, one frame per
+cell, left to right then top to bottom. The PNG is not changed, and it doesn't
+matter whether it is also open in a tab: the file on disk is what gets read.
+
+- **Positions never shift.** A cell with nothing in it stays as an empty frame and
+  is listed in `sheet.emptyFrames`. Frames count from 1, so frame N is cell N-1 in
+  a game that counts from 0.
+- **`x`, `y`, `columns` and `rows` pick one area.** Without `columns` or `rows` it
+  runs to the sheet's edge, and the reply has a `warning` if that left pixels
+  over, which usually means the frame size is wrong or the sheet is not one grid.
+- **The new sprite has no file,** so its first save needs a `path`, and that can't
+  be the PNG. It is one undo step. An indexed PNG becomes RGB. The limit is 1024
+  frames.
+
+Replies with the same overview as `get_sprite_info`, plus
+`"sheet": {"columns": 4, "rows": 11, "emptyFrames": [39, 43]}`.
+
+### `export_spritesheet(path, columns=None, onto=None, x=0, y=0, tag=None)`
+Writes the visible layers of every frame, or of one `tag`, as a grid to a `.png`
+inside an allowed directory. A hidden layer stays out, so a reference layer can
+live in the project. The sprite, its layers and its own file do not change.
+
+- **Without `onto`** it makes a new sheet, one row unless `columns` is set. `path`
+  must not exist yet. Each side is limited to 8192 pixels.
+- **With `onto`,** an existing PNG, it starts from a copy of that sheet and replaces
+  the cells at `x`, `y`. Pixels are replaced rather than blended, so erasing works
+  and partial alpha lands exactly. Everything outside the frames written keeps what
+  it had, including cells past the last frame. The block must fit inside the sheet.
+- **`changedPixels`** in the reply counts what `onto` changed. A round trip with no
+  edits reports 0.
+- **Replacing an existing PNG takes `onto` with the same path.** A PNG has no layers
+  to go back to, so this is never done by accident.
+
+A sheet with mixed frame sizes takes one import and one export per area, each
+pasted onto the result of the last:
+
+```python
+import_spritesheet("hero.png", 16, 32, columns=4, rows=4)          # walk rows
+# ...edit, save_sprite("hero_walk.aseprite")...
+export_spritesheet("hero_new.png", columns=4, onto="hero.png")
+
+import_spritesheet("hero.png", 32, 48, y=192, columns=2, rows=3)   # tall frames
+# ...edit, save_sprite("hero_tall.aseprite")...
+export_spritesheet("hero_new.png", columns=2, onto="hero_new.png", y=192)
+```
 
 ---
 
