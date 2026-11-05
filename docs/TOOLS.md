@@ -201,9 +201,13 @@ region, edit the map and write it back. Row 0 lands at `y`, column 0 at `x`.
   replacement.
 - ` ` (space) is always skipped, matching `get_region`'s off-canvas marker.
 - The reply carries a `warning` when characters fall outside the canvas
-  (`skippedOffCanvas`), or when rows differ in length with `blank="erase"`. That
-  is almost always a miscounted row, which otherwise only shows up as a shape one
-  column off in the next preview.
+  (`skippedOffCanvas`), or when rows differ in length and the block should be
+  solid: with `blank="erase"`, or with `blank="skip"` when no row uses `.` or a
+  space. That is almost always a miscounted row, which otherwise only shows up as
+  a shape one column off in the next preview. Rows using `.` or a space may stop
+  short on purpose in skip mode, so they stay quiet. A solid shape that really is
+  uneven, like a stepped edge, gets the warning anyway and can ignore it.
+- Inside a `batch`, these warnings reach the reply's `warnings` with the op's index.
 
 ### `draw_rect(x, y, width, height, color, filled=True, layer=None, frame=None)`
 A filled rectangle, or a 1px outline with `filled=false`.

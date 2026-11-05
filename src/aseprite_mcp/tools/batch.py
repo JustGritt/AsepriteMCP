@@ -12,6 +12,7 @@ transaction: one undo step, and all or nothing when any of them fails.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from mcp.server.mcpserver import Image, MCPServer
@@ -49,6 +50,23 @@ def _reason(exc: Exception) -> str:
     return str(exc.__cause__) if exc.__cause__ else str(exc)
 
 
+def _text_of(result: Any) -> str:
+    return "".join(b.text for b in result.content if getattr(b, "type", None) == "text")
+
+
+def _own_warning(result: Any) -> str | None:
+    """A warning the op's tool worked out itself, such as draw_rows on uneven rows.
+
+    Lua never sees these. While a batch collects, ctx.call returns {}, so anything
+    in the tool's own reply came from the tool.
+    """
+    try:
+        payload = json.loads(_text_of(result))
+    except ValueError:
+        return None
+    return payload.get("warning") if isinstance(payload, dict) else None
+
+
 def _union(boxes: list[list[int]]) -> list[int]:
     left = min(box[0] for box in boxes)
     top = min(box[1] for box in boxes)
@@ -57,7 +75,9 @@ def _union(boxes: list[list[int]]) -> list[int]:
     return [left, top, right - left, bottom - top]
 
 
-def _summary(reply: dict[str, Any], commands: list[dict[str, Any]]) -> dict[str, Any]:
+def _summary(
+    reply: dict[str, Any], commands: list[dict[str, Any]], own_warnings: dict[int, str]
+) -> dict[str, Any]:
     """What the agent cannot work out from the ops it just sent.
 
     One entry per op mostly repeats the layer, frame and coordinates, and the
@@ -73,9 +93,11 @@ def _summary(reply: dict[str, Any], commands: list[dict[str, Any]]) -> dict[str,
     new_frames: list[int] = []
     warnings: list[dict[str, Any]] = []
     palette_notes: list[str] = []
+    results = reply.get("results") or []
 
-    for op, (command, result) in enumerate(zip(commands, reply.get("results") or [])):
+    for op, command in enumerate(commands):
         name = command["command"]
+        result = results[op] if op < len(results) else {}
         for key in _TOTALS:
             # type(), because cel.copy reports replaced as a bool, and True is an int.
             if type(result.get(key)) in (int, float):
@@ -91,7 +113,11 @@ def _summary(reply: dict[str, Any], commands: list[dict[str, Any]]) -> dict[str,
         if "frameCount" in result:
             summary["frameCount"] = result["frameCount"]
         # A note says an op did nothing, e.g. "No pixel matched that color."
-        said = [text for text in (result.get("warning"), result.get("note")) if text]
+        said = [
+            text
+            for text in (result.get("warning"), result.get("note"), own_warnings.get(op))
+            if text
+        ]
         if said:
             warnings.append({"op": op, "warning": " ".join(said)})
         for note in [result.get("paletteNote"), *result.get("paletteNotes", [])]:
@@ -125,6 +151,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             raise BridgeError(ErrorCode.INVALID_PARAMS, "ops must hold at least one op.")
 
         commands: list[dict[str, Any]] = []
+        own_warnings: dict[int, str] = {}
         for i, op in enumerate(ops):
             if op.tool not in BATCHABLE:
                 raise BridgeError(
@@ -143,14 +170,18 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             finally:
                 _recording.reset(token)
             if getattr(result, "is_error", False):
-                text = "".join(b.text for b in result.content if getattr(b, "type", None) == "text")
-                raise BridgeError(ErrorCode.INVALID_PARAMS, f"ops[{i}] ({op.tool}): {text}")
+                raise BridgeError(
+                    ErrorCode.INVALID_PARAMS, f"ops[{i}] ({op.tool}): {_text_of(result)}"
+                )
+            warning = _own_warning(result)
+            if warning:
+                own_warnings[i] = warning
             commands.extend({"command": c, "params": p} for c, p in recorded)
 
         reply = await ctx.call(
             "batch.run", {"ops": commands}, timeout=ctx.config.render_timeout
         )
-        content: list[Image | str] = [as_json(_summary(reply, commands))]
+        content: list[Image | str] = [as_json(_summary(reply, commands, own_warnings))]
 
         if preview:
             frames = [r["frame"] for r in reply.get("results", []) if isinstance(r, dict) and "frame" in r]

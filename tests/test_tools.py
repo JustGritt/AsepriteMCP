@@ -580,9 +580,22 @@ class TestDrawRows:
         ))
         assert "4 wide (rows 1)" in payload["warning"]
 
-    async def test_uneven_rows_are_fine_when_skipping(self, server, aseprite):
+    async def test_uneven_solid_rows_are_flagged_when_skipping(self, server, aseprite):
+        # Seen on a full-width lake: rows ending a pixel or two short, and nothing said so.
         mcp, _ = server
-        payload = json_of(await ok(mcp, "draw_rows", x=0, y=0, rows=["aa", "aaaa"], legend={"a": "#fff"}))
+        payload = json_of(await ok(mcp, "draw_rows", x=0, y=0, rows=["aaaa", "aa", "aaaa"], legend={"a": "#fff"}))
+        assert "2 wide (rows 1)" in payload["warning"]
+
+    @pytest.mark.parametrize("rows", [["a.", "aaaa"], [" a", "aaaa"], ["..a", "aaaa", "a"]])
+    async def test_uneven_shaped_rows_are_fine_when_skipping(self, server, aseprite, rows):
+        # Using transparency means the shape is deliberate, and rows may stop short.
+        mcp, _ = server
+        payload = json_of(await ok(mcp, "draw_rows", x=0, y=0, rows=rows, legend={"a": "#fff"}))
+        assert "warning" not in payload
+
+    async def test_even_solid_rows_are_fine_when_skipping(self, server, aseprite):
+        mcp, _ = server
+        payload = json_of(await ok(mcp, "draw_rows", x=0, y=0, rows=["aa", "aa"], legend={"a": "#fff"}))
         assert "warning" not in payload
 
     async def test_row_warning_joins_an_aseprite_warning(self, server, aseprite):
@@ -843,6 +856,59 @@ class TestBatch:
             {"op": 1, "warning": "2 pixel(s) fell outside the 8x8 canvas and were ignored."},
             {"op": 2, "warning": "No pixel matched that color."},
         ]
+
+    async def test_a_tools_own_warning_reaches_the_agent(self, server, aseprite):
+        # The tool works this one out itself, and Lua never sees it.
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 2, "undoSteps": 1, "results": [
+            {"frame": 2, "durationMs": 100, "frameCount": 2},
+            {"written": 3, "changed": [0, 0, 3, 2], "frame": 2},
+        ]})
+        payload = json_of(await ok(mcp, "batch", ops=[
+            {"tool": "create_frame"},
+            {"tool": "draw_rows", "args": {
+                "x": 0, "y": 0, "rows": ["aa", "a.a."], "legend": {"a": "#fff"}, "blank": "erase",
+            }},
+        ]))
+        assert [w["op"] for w in payload["warnings"]] == [1]
+        assert "Rows differ in length" in payload["warnings"][0]["warning"]
+
+    async def test_uneven_solid_rows_are_flagged_inside_a_batch(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 1, "results": [{"written": 6, "frame": 1}]})
+        payload = json_of(await ok(mcp, "batch", ops=[
+            {"tool": "draw_rows", "args": {"x": 0, "y": 0, "rows": ["aaaa", "aa"], "legend": {"a": "#fff"}}},
+        ]))
+        assert payload["warnings"][0]["op"] == 0
+        assert "2 wide (rows 1)" in payload["warnings"][0]["warning"]
+
+    async def test_a_tools_warning_joins_aseprites_on_the_same_op(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 1, "results": [
+            {"written": 1, "warning": "1 pixel(s) fell outside the 2x2 canvas and were ignored."},
+        ]})
+        payload = json_of(await ok(mcp, "batch", ops=[
+            {"tool": "draw_rows", "args": {"x": 0, "y": 0, "rows": ["aaaa", "aa"], "legend": {"a": "#fff"}}},
+        ]))
+        assert len(payload["warnings"]) == 1
+        text = payload["warnings"][0]["warning"]
+        assert "fell outside" in text and "Rows differ in length" in text
+
+    async def test_a_tools_warning_survives_a_reply_without_results(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 1})
+        payload = json_of(await ok(mcp, "batch", ops=[
+            {"tool": "draw_rows", "args": {"x": 0, "y": 0, "rows": ["aaaa", "aa"], "legend": {"a": "#fff"}}},
+        ]))
+        assert "Rows differ in length" in payload["warnings"][0]["warning"]
+
+    async def test_clean_rows_leave_no_warnings_in_a_batch(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 1, "results": [{"written": 4, "frame": 1}]})
+        payload = json_of(await ok(mcp, "batch", ops=[
+            {"tool": "draw_rows", "args": {"x": 0, "y": 0, "rows": ["aa", "aa"], "legend": {"a": "#fff"}}},
+        ]))
+        assert "warnings" not in payload
 
     async def test_palette_notes_appear_once(self, server, aseprite):
         mcp, _ = server
