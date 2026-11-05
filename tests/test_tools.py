@@ -853,9 +853,22 @@ class TestBatch:
         ]})
         payload = json_of(await ok(mcp, "batch", ops=[{"tool": "create_frame"}] * 3))
         assert payload["warnings"] == [
-            {"op": 1, "warning": "2 pixel(s) fell outside the 8x8 canvas and were ignored."},
-            {"op": 2, "warning": "No pixel matched that color."},
+            {"ops": [1], "warning": "2 pixel(s) fell outside the 8x8 canvas and were ignored."},
+            {"ops": [2], "warning": "No pixel matched that color."},
         ]
+
+    async def test_a_repeated_warning_appears_once_with_every_op(self, server, aseprite):
+        # Seen on a real reply: 16 fills that did nothing cost over a kilobyte.
+        mcp, _ = server
+        note = "The origin pixel is already that color; nothing to fill."
+        aseprite.reply("batch.run", {"applied": 4, "results": [
+            {"filled": 0, "note": note},
+            {"written": 1},
+            {"filled": 0, "note": note},
+            {"filled": 0, "note": note},
+        ]})
+        payload = json_of(await ok(mcp, "batch", ops=[{"tool": "create_frame"}] * 4))
+        assert payload["warnings"] == [{"ops": [0, 2, 3], "warning": note}]
 
     async def test_a_tools_own_warning_reaches_the_agent(self, server, aseprite):
         # The tool works this one out itself, and Lua never sees it.
@@ -870,7 +883,7 @@ class TestBatch:
                 "x": 0, "y": 0, "rows": ["aa", "a.a."], "legend": {"a": "#fff"}, "blank": "erase",
             }},
         ]))
-        assert [w["op"] for w in payload["warnings"]] == [1]
+        assert [w["ops"] for w in payload["warnings"]] == [[1]]
         assert "Rows differ in length" in payload["warnings"][0]["warning"]
 
     async def test_uneven_solid_rows_are_flagged_inside_a_batch(self, server, aseprite):
@@ -879,7 +892,7 @@ class TestBatch:
         payload = json_of(await ok(mcp, "batch", ops=[
             {"tool": "draw_rows", "args": {"x": 0, "y": 0, "rows": ["aaaa", "aa"], "legend": {"a": "#fff"}}},
         ]))
-        assert payload["warnings"][0]["op"] == 0
+        assert payload["warnings"][0]["ops"] == [0]
         assert "2 wide (rows 1)" in payload["warnings"][0]["warning"]
 
     async def test_a_tools_warning_joins_aseprites_on_the_same_op(self, server, aseprite):

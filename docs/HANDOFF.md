@@ -16,8 +16,8 @@ by the server rather than exposed, and `draw_rows` / `draw_rect` are decoded int
 
 | | |
 | --- | --- |
-| Python tests | 330 passing |
-| Lua assertions | 463 passing, against the real engine |
+| Python tests | 350 passing |
+| Lua assertions | 481 passing, against the real engine |
 | End-to-end | 34/34 spec §29 workflow, from the session that landed `593bf03` |
 | Sprite sheets | A real 64x352 sheet with three frame sizes rebuilt in the live app, area by area: 0 raw RGBA differences, on 1.3.18.6 |
 | Aseprite | 1.3.18.3, `apiVersion` 41, Steam build |

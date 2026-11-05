@@ -91,7 +91,8 @@ def _summary(
     boxes: list[list[int]] = []
     created: list[dict[str, Any]] = []
     new_frames: list[int] = []
-    warnings: list[dict[str, Any]] = []
+    # Keyed by text: the same note on 16 ops should not cost 16 sentences.
+    warnings: dict[str, list[int]] = {}
     palette_notes: list[str] = []
     results = reply.get("results") or []
 
@@ -119,7 +120,7 @@ def _summary(
             if text
         ]
         if said:
-            warnings.append({"op": op, "warning": " ".join(said)})
+            warnings.setdefault(" ".join(said), []).append(op)
         for note in [result.get("paletteNote"), *result.get("paletteNotes", [])]:
             if note and note not in palette_notes and len(palette_notes) < _MAX_PALETTE_NOTES:
                 palette_notes.append(note)
@@ -129,7 +130,7 @@ def _summary(
         "changed": _union(boxes) if boxes else None,
         "created": created,
         "newFrames": new_frames,
-        "warnings": warnings,
+        "warnings": [{"ops": ops, "warning": text} for text, ops in warnings.items()],
         "paletteNotes": palette_notes,
     }
     summary.update({key: value for key, value in optional.items() if value})

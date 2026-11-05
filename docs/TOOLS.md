@@ -410,9 +410,12 @@ frame used to cost one turn per step; a batch is one turn.
     left out when zero. Comparing `written` with the expected count catches a
     miscounted row.
   - `created` lists new layers and `newFrames` lists new frame numbers, both in op
-    order. `frameCount` is the count after the last op that changed it.
-  - `warnings` is `[{"op": 12, "warning": "..."}]`, with the op's index. It also
-    carries notes saying an op did nothing, like `No pixel matched that color.`
+    order. A frame number is the one it got when created, so a later op that inserts
+    or deletes a frame can shift it. `frameCount` is the count after the last op
+    that changed it.
+  - `warnings` is `[{"ops": [12, 15], "warning": "..."}]`: each message once, with
+    the index of every op that raised it. It also carries notes saying an op did
+    nothing, like `No pixel matched that color.`
   - `paletteNotes` lists each palette note once, at most five.
 - `preview=true` appends a canvas preview of the last frame an op reported.
 - Batchable tools: the drawing, cel and frame tools, `select_layer`,
