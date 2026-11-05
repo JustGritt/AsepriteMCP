@@ -90,5 +90,6 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             if frames:
                 params["frame"] = frames[-1]
             image, result = await render_to_image(ctx, "render.canvas", params)
-            content = [image, describe(result), content[0]]
+            label = describe(result)
+            content = [ctx.image_or_note(image, label), label, content[0]]
         return content

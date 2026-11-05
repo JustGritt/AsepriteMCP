@@ -789,6 +789,38 @@ test("render.onionSkin reports neighbours", function()
   sprite:close()
 end)
 
+test("identical pixels render to identical png bytes", function()
+  -- The server skips resending an image the agent already has by comparing
+  -- PNG bytes, so it relies on this. Test-only file read; the extension itself
+  -- reads nothing outside fsio.lua.
+  local function bytes(path)
+    local file = assert(io.open(path, "rb"))
+    local data = file:read("a")
+    file:close()
+    return data
+  end
+  local sprite = newSprite(16, 16)
+  call("draw.pixels", { pixels = { { x = 3, y = 4, color = "#ff8800ff" } } })
+  local function render(name)
+    local out = tempPath(name)
+    call("render.canvas", { scale = 8, maxEdge = 768, outPath = out })
+    return bytes(out)
+  end
+  local before = render("same1.png")
+  equals(render("same2.png") == before, true, "the same render twice is byte-identical")
+  call("draw.pixels", { pixels = { { x = 5, y = 5, color = "#00ff00ff" } } })
+  equals(render("edited.png") ~= before, true, "an edit changes the bytes")
+  app.undo()
+  equals(render("undone.png") == before, true, "undoing it restores them")
+
+  call("frame.duplicate", { frame = 1 })
+  local sheet1, sheet2 = tempPath("sheet1.png"), tempPath("sheet2.png")
+  call("render.contactSheet", { scale = 4, maxEdge = 1280, outPath = sheet1 })
+  call("render.contactSheet", { scale = 4, maxEdge = 1280, outPath = sheet2 })
+  equals(bytes(sheet1) == bytes(sheet2), true, "so is a contact sheet")
+  sprite:close()
+end)
+
 print("=== frame comparison ===")
 test("anim.compare reports what moved, as numbers", function()
   local sprite = newSprite(8, 8)

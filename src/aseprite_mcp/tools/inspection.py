@@ -12,7 +12,8 @@ get_canvas_preview(layer=...).
 An image costs the model about width*height/750 tokens and stays in its context
 for the rest of the session, so every render carries a long-edge cap
 (Config.preview_max_edge) and region lets the agent zoom into the part it cares
-about instead of paying for the whole canvas at a high scale.
+about instead of paying for the whole canvas at a high scale. An image the agent
+already has is replaced by one line of text (ToolContext.image_or_note).
 """
 
 from __future__ import annotations
@@ -97,7 +98,8 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             params["region"] = area
         command = "render.layer" if layer is not None else "render.canvas"
         image, result = await render_to_image(ctx, command, params)
-        return [image, describe(result)]
+        label = describe(result)
+        return [ctx.image_or_note(image, label), label]
 
     @mcp.tool(
         title="Get region pixels",

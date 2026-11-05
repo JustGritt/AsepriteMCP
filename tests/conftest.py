@@ -23,8 +23,11 @@ from aseprite_mcp.config import Config
 from aseprite_mcp.server import build_server
 
 
-def tiny_png() -> bytes:
-    """A valid 1x1 transparent PNG, built rather than pasted so it cannot rot."""
+def tiny_png(rgba: bytes = b"\x00\x00\x00\x00") -> bytes:
+    """A valid 1x1 PNG of one color, transparent by default.
+
+    Built rather than pasted so it cannot rot.
+    """
 
     def chunk(tag: bytes, data: bytes) -> bytes:
         return (
@@ -35,7 +38,7 @@ def tiny_png() -> bytes:
         )
 
     header = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)
-    pixels = zlib.compress(b"\x00" + b"\x00\x00\x00\x00")
+    pixels = zlib.compress(b"\x00" + rgba)
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", pixels) + chunk(b"IEND", b"")
 
 
@@ -45,6 +48,9 @@ class FakeAseprite:
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
         self.responses: dict[str, Any] = {"fs.probe": {"canWriteFiles": True}}
+        # What every render writes. Aseprite's PNGs are byte-identical for
+        # identical pixels, so changing this stands in for editing the sprite.
+        self.png = tiny_png()
         self.hello: dict[str, Any] = {
             "type": "hello",
             "asepriteVersion": "1.3.18.3",
@@ -102,7 +108,7 @@ class FakeAseprite:
         # This happens before the canned callback runs, so a callback can delete
         # the file to simulate Aseprite reporting success without writing one.
         if "outPath" in params:
-            Path(params["outPath"]).write_bytes(tiny_png())
+            Path(params["outPath"]).write_bytes(self.png)
 
         canned = self.responses.get(command)
         if callable(canned):
