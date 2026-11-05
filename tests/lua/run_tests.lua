@@ -92,6 +92,15 @@ local function tempPath(name)
   return path
 end
 
+--- Whole file as a string, to prove a file did or did not change.
+local function fileBytes(path)
+  local file = assert(io.open(path, "rb"))
+  local data = file:read("a")
+  file:close()
+  return data
+end
+
+
 -- ------------------------------------------------------------------------ tests
 
 print("=== sprite ===")
@@ -935,6 +944,38 @@ test("sprite.save writes a file", function()
   local reopened = call("sprite.open", { path = out })
   equals(reopened.width, 8, "reopened sprite has the right size")
   app.sprite:close()
+end)
+
+test("sprite.save refuses to pick its own target", function()
+  -- The server vets the file before saving. A call that names nothing has been
+  -- vetted by nobody, and would write wherever the active tab came from.
+  local out = tempPath("bare.aseprite")
+  local sprite = newSprite(8, 8)
+  call("sprite.save", { path = out })
+  local before = fileBytes(out)
+  call("draw.pixels", { pixels = { { x = 1, y = 1, color = "#ff0000ff" } } })
+  expectError("sprite.save", {}, "INVALID_PARAMS", "no path and no expectedPath is refused")
+  check(fileBytes(out) == before, "the file was not written")
+  sprite:close()
+end)
+
+test("sprite.save with expectedPath only saves that document", function()
+  local out = tempPath("expected.aseprite")
+  local sprite = newSprite(8, 8)
+  call("sprite.save", { path = out })
+  local own = sprite.filename
+
+  local result = call("sprite.save", { expectedPath = own })
+  equals(result.savedTo, own, "saves over its own file when it still matches")
+
+  -- The tab changed between the server's check and this command.
+  local other = newSprite(4, 4)
+  local before = fileBytes(out)
+  expectError("sprite.save", { expectedPath = own }, "INVALID_PARAMS",
+    "a different active document is refused")
+  check(fileBytes(out) == before, "the checked file was not touched")
+  other:close()
+  sprite:close()
 end)
 
 test("unknown command is rejected by name", function()

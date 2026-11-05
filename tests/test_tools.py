@@ -140,10 +140,43 @@ class TestSprite:
         mcp, _ = server
         assert "INVALID_PARAMS" in await err(mcp, "open_sprite", path="ghost.aseprite")
 
-    async def test_save_in_place(self, server, aseprite):
+    async def test_save_in_place(self, server, aseprite, sandbox):
         mcp, _ = server
+        own_file = str(sandbox / "hero.aseprite")
+        aseprite.reply("sprite.info", {"path": own_file})
         await ok(mcp, "save_sprite")
-        assert aseprite.last("sprite.save")["params"] == {}
+        # Lua checks this against the active document, so switching tabs after
+        # the sandbox check cannot redirect the save.
+        assert aseprite.last("sprite.save")["params"] == {"expectedPath": own_file}
+
+    async def test_save_in_place_refuses_a_file_outside_the_sandbox(
+        self, server, aseprite, tmp_path
+    ):
+        mcp, _ = server
+        aseprite.reply("sprite.info", {"path": str(tmp_path / "outside.aseprite")})
+        message = await err(mcp, "save_sprite")
+        assert "PATH_NOT_ALLOWED" in message
+        assert "Pass a path" in message
+        assert not [r for r in aseprite.requests if r["command"] == "sprite.save"]
+
+    async def test_save_in_place_refuses_a_png(self, server, aseprite, sandbox):
+        mcp, _ = server
+        aseprite.reply("sprite.info", {"path": str(sandbox / "flat.png")})
+        message = await err(mcp, "save_sprite")
+        assert "PATH_NOT_ALLOWED" in message
+        # The sandbox's own message ends without a stop, and this one follows it.
+        assert ".aseprite. Pass a path" in message
+        assert not [r for r in aseprite.requests if r["command"] == "sprite.save"]
+
+    @pytest.mark.parametrize("name", ["", "Sprite", "hero.aseprite"])
+    async def test_save_in_place_needs_a_real_file(self, server, aseprite, name):
+        # A sprite created by script reports "Sprite", and one named like a file
+        # must not be resolved against the sandbox root and pass.
+        mcp, _ = server
+        aseprite.reply("sprite.info", {"path": name})
+        message = await err(mcp, "save_sprite")
+        assert "never been saved" in message
+        assert not [r for r in aseprite.requests if r["command"] == "sprite.save"]
 
     async def test_save_to_a_path_creates_parent_directories(self, server, aseprite, sandbox):
         mcp, _ = server
@@ -856,7 +889,7 @@ MINIMAL_ARGUMENTS = {
     "get_sprite_info": {},
     "new_sprite": {"width": 8, "height": 8},
     "open_sprite": {"path": "fixture.aseprite"},
-    "save_sprite": {},
+    "save_sprite": {"path": "fixture.aseprite"},
     "select_layer": {"layer": "Character"},
     "create_layer": {"name": "New"},
     "delete_layer": {"layer": "Character"},

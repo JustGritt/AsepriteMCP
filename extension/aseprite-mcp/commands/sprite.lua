@@ -127,11 +127,17 @@ return function(deps)
     local path = params.path
 
     if path == nil or path == "" then
-      if sprite.filename == nil or sprite.filename == "" then
-        proto.fail(
+      -- The server vetted expectedPath, not whichever tab is in front now. Saving
+      -- without this check would let a tab switch redirect the write.
+      local expected = params.expectedPath
+      if expected == nil or expected == "" then
+        proto.fail(proto.ERROR.INVALID_PARAMS, "sprite.save needs a path or an expectedPath.")
+      end
+      if sprite.filename ~= expected then
+        proto.failf(
           proto.ERROR.INVALID_PARAMS,
-          "This sprite has never been saved, so there is no file to save over. "
-            .. "Pass a path inside an allowed directory."
+          "The active document changed to %s during the save, so nothing was written. "
+            .. "Check it is the one you meant, then save again.", sprite.filename
         )
       end
       path = sprite.filename
