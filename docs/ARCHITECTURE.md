@@ -7,6 +7,17 @@ rather than taken from documentation.
 
 ## Shape
 
+The default transport is stdio. `aseprite-mcp --http PORT` instead serves
+Streamable HTTP on `127.0.0.1:PORT/mcp`: multiple clients share one process and
+one WebSocket bridge. The HTTP application lifespan owns the bridge, so closing
+one MCP session does not stop it. Shared mode refuses startup if the bridge port
+is occupied, rather than serving tools that cannot reach Aseprite.
+
+Whole tool calls are serialized; nested batch validation reuses the outer lock.
+HTTP session IDs key a bounded cache of drawing legends and preview history.
+Stateless requests get fresh memory. The active document, undo history and file
+allowlist remain shared; this is not isolation between independent projects.
+
 ```
 MCP client (Claude Code / Codex)
       |  stdio JSON-RPC
