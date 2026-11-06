@@ -67,9 +67,16 @@ def _resolve_legend(legend: dict[str, str | int]) -> dict[str, dict[str, Any]]:
     return resolved
 
 
-def _uneven_rows(rows: list[str]) -> str | None:
-    """Describe rows of different lengths, which in erase mode is almost always a
-    miscounted row: the edge of the shape lands a column off without any error."""
+def _uneven_rows(rows: list[str], blank: str) -> str | None:
+    """Describe rows of different lengths where that is almost always a miscount:
+    the edge of the shape lands a column off without any error.
+
+    That covers erase mode, and skip mode when no row uses '.' or ' ', because the
+    shape is then a solid block. Otherwise rows may stop short on purpose, since the
+    rest is transparent anyway.
+    """
+    if blank != "erase" and any(TRANSPARENT in row or OUTSIDE in row for row in rows):
+        return None
     by_length: dict[int, list[int]] = {}
     for index, row in enumerate(rows):
         by_length.setdefault(len(row), []).append(index)
@@ -201,7 +208,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         result = await ctx.call("draw.pixels", params, timeout=ctx.config.render_timeout)
         if reused:
             result["legend"] = "reused"
-        uneven = _uneven_rows(rows) if blank == "erase" else None
+        uneven = _uneven_rows(rows, blank)
         if uneven:
             result["warning"] = " ".join(filter(None, (result.get("warning"), uneven)))
         return as_json(result)

@@ -201,9 +201,13 @@ region, edit the map and write it back. Row 0 lands at `y`, column 0 at `x`.
   replacement.
 - ` ` (space) is always skipped, matching `get_region`'s off-canvas marker.
 - The reply carries a `warning` when characters fall outside the canvas
-  (`skippedOffCanvas`), or when rows differ in length with `blank="erase"`. That
-  is almost always a miscounted row, which otherwise only shows up as a shape one
-  column off in the next preview.
+  (`skippedOffCanvas`), or when rows differ in length and the block should be
+  solid: with `blank="erase"`, or with `blank="skip"` when no row uses `.` or a
+  space. That is almost always a miscounted row, which otherwise only shows up as
+  a shape one column off in the next preview. Rows using `.` or a space may stop
+  short on purpose in skip mode, so they stay quiet. A solid shape that really is
+  uneven, like a stepped edge, gets the warning anyway and can ignore it.
+- Inside a `batch`, these warnings reach the reply's `warnings` with the op's index.
 
 ### `draw_rect(x, y, width, height, color, filled=True, layer=None, frame=None)`
 A filled rectangle, or a 1px outline with `filled=false`.
@@ -390,6 +394,29 @@ frame used to cost one turn per step; a batch is one turn.
   its index (`ops[1] (draw_rows): ...`) and nothing reaches Aseprite.
 - **All or nothing.** If an op fails inside Aseprite, every op is rolled back,
   and the error names the op that failed.
+- **The reply is a summary, not one entry per op.** Most of a per-op reply repeats
+  what was just sent, and it stays in context for the rest of the session, so its
+  size doesn't grow with the op count unless something notable happened:
+
+  ```json
+  {"applied": 94, "undoSteps": 1, "changed": [0, 57, 91, 71], "written": 528,
+   "filled": 3463, "created": [{"id": "fffb0d4f", "name": "Cliff"}]}
+  ```
+
+  - `changed` is the union of every draw, fill and recolor box, across layers and
+    frames. It makes a ready-made preview region, but erases and cel moves report
+    no box, so it doesn't cover those.
+  - `written`, `filled`, `erased`, `replaced` and `skippedOffCanvas` are totals,
+    left out when zero. Comparing `written` with the expected count catches a
+    miscounted row.
+  - `created` lists new layers and `newFrames` lists new frame numbers, both in op
+    order. A frame number is the one it got when created, so a later op that inserts
+    or deletes a frame can shift it. `frameCount` is the count after the last op
+    that changed it.
+  - `warnings` is `[{"ops": [12, 15], "warning": "..."}]`: each message once, with
+    the index of every op that raised it. It also carries notes saying an op did
+    nothing, like `No pixel matched that color.`
+  - `paletteNotes` lists each palette note once, at most five.
 - `preview=true` appends a canvas preview of the last frame an op reported.
 - Batchable tools: the drawing, cel and frame tools, `select_layer`,
   `create_layer`, `set_layer_visibility` and the tag tools. Previews, file

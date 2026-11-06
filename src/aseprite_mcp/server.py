@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
+from collections import OrderedDict
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -100,6 +102,9 @@ class AsepriteServer(MCPServer):
     def __init__(self, *args: Any, usage_log: UsageLog | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._usage_log = usage_log
+        self._tool_lock = asyncio.Lock()
+        self._shared_context: ToolContext | None = None
+        self._session_memory: OrderedDict[str, ToolContext] = OrderedDict()
 
     def tool(self, *args: Any, structured_output: bool | None = False, **kwargs: Any):
         # Every tool already returns JSON as text. Left on, the SDK also derives
@@ -114,6 +119,35 @@ class AsepriteServer(MCPServer):
         ]
 
     async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None):
+        # Batch validation recursively calls tools while already holding the lock.
+        if _recording.get() is not None:
+            return await super().call_tool(name, arguments, context)
+        async with self._tool_lock:
+            ctx = self._shared_context
+            if ctx is None or context is None:
+                return await self._call_tool(name, arguments, context)
+            # The SDK session proxy can be recreated for every request. HTTP's
+            # transport-validated session id is stable. Stateless calls get fresh
+            # memory; this id is only a cache key, never an access-control boundary.
+            session = (context.headers or {}).get("mcp-session-id")
+            memory = self._session_memory.get(session) if session else None
+            if memory is None:
+                memory = ToolContext(bridge=ctx.bridge, config=ctx.config)
+            if session:
+                self._session_memory[session] = memory
+                self._session_memory.move_to_end(session)
+                while len(self._session_memory) > 128:
+                    self._session_memory.popitem(last=False)
+            fields = ("last_legend", "_image_labels", "_latest_image", "_skipped_images")
+            for field in fields:
+                setattr(ctx, field, getattr(memory, field))
+            try:
+                return await self._call_tool(name, arguments, context)
+            finally:
+                for field in fields:
+                    setattr(memory, field, getattr(ctx, field))
+
+    async def _call_tool(self, name: str, arguments: dict[str, Any], context: Any = None):
         # Ops a batch is collecting are part of the batch's own entry.
         if self._usage_log is None or _recording.get() is not None:
             return await super().call_tool(name, arguments, context)
@@ -127,7 +161,7 @@ class AsepriteServer(MCPServer):
         return result
 
 
-def build_server(config: Config | None = None) -> tuple[MCPServer, ToolContext]:
+def build_server(config: Config | None = None, *, shared: bool = False) -> tuple[MCPServer, ToolContext]:
     """Construct the server and its tool context.
 
     Returned as a pair so tests can reach the context (and therefore the bridge)
@@ -141,6 +175,11 @@ def build_server(config: Config | None = None) -> tuple[MCPServer, ToolContext]:
     async def lifespan(_server: MCPServer):
         await bridge.start()
         try:
+            if shared and bridge.bind_error:
+                raise RuntimeError(
+                    f"{bridge.bind_error} Stop the old stdio server, then start one "
+                    "shared HTTP server and point every client at its /mcp URL."
+                )
             yield ctx
         finally:
             await bridge.stop()
@@ -154,6 +193,8 @@ def build_server(config: Config | None = None) -> tuple[MCPServer, ToolContext]:
         log_level=config.log_level,
         usage_log=UsageLog(config.usage_log) if config.usage_log else None,
     )
+    if shared:
+        mcp._shared_context = ctx
 
     for module in (
         connection, sprite, layers, frames, drawing, cels, inspection, animation, history, batch,

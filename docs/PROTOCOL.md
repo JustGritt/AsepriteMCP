@@ -120,6 +120,10 @@ decoded on the server into `draw.pixels`; and `get_canvas_preview` sends
 The dispatch table is fixed at load. An unrecognised `command` is an
 `UNKNOWN_COMMAND` error and is never `load()`ed or evaluated.
 
+`batch.run` replies with `applied`, `undoSteps` and one entry per op in `results`.
+That stays between Lua and the server: `tools/batch.py` reads `results` to find the
+frame to preview and to build the summary the agent gets (see `docs/TOOLS.md`).
+
 `sprite.save` takes either `path` or `expectedPath`, and refuses a call with
 neither. For a save with no path, the server reads the active document's path
 with `sprite.info`, puts it through the sandbox and sends it back as

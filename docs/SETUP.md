@@ -73,6 +73,58 @@ next file.
 
 ## 4. Point your MCP client at the server
 
+### Multiple sessions: one shared HTTP server
+
+Start this once in a terminal and leave it running:
+
+```powershell
+uv run --directory C:\Users\Gritt\orca\AsepriteMCP aseprite-mcp --http 8766
+```
+
+Use your own repository path on other machines. Configure every MCP client to
+use the same Streamable HTTP URL: `http://127.0.0.1:8766/mcp`. For clients with
+JSON MCP configuration, the server entry is typically:
+
+```json
+{
+  "mcpServers": {
+    "aseprite": {
+      "type": "http",
+      "url": "http://127.0.0.1:8766/mcp"
+    }
+  }
+}
+```
+
+Replace the old command/args entry with the URL entry; do not launch a server
+per session. Stop existing stdio server processes before starting the shared
+server, then reconnect your MCP clients. HTTP mode fails at startup with a
+remedy if another process owns the bridge port.
+
+The two ports have different jobs: `8766` is for MCP clients; `32145` remains
+the Aseprite WebSocket bridge. Leave **File > MCP Bridge...** on `32145`.
+If `8766` is occupied, choose another `--http` port and update the client URLs.
+If an unrelated app owns `32145`, change `ASEPRITE_MCP_PORT` and the Aseprite
+dialog to the same free port. HTTP always binds to `127.0.0.1`.
+
+Whole tool calls are serialized, including batches and their previews. Drawing
+legends and preview history are separate for each HTTP session (the most recent
+128 sessions are remembered; stateless requests have no remembered history).
+Disconnecting a client leaves the server and other clients running.
+
+All clients still control **one live Aseprite session**: active document,
+selection, layers and undo history are shared. Serialization prevents tool
+internals from interleaving; it does not reserve a document across multiple tool
+calls. Coordinate work on different documents instead of running independent
+editing workflows at the same time.
+
+Set `ASEPRITE_MCP_ALLOWED_DIRS` in the shared server's environment before starting
+it to include your project asset folders. This allowlist is shared by all
+clients, not isolated per project. The server runs until you stop it; this mode
+does not install a background service or start automatically at login.
+
+### Single session: stdio
+
 ```sh
 claude mcp add aseprite -- uv run --directory /path/to/AsepriteMCP aseprite-mcp
 ```

@@ -32,3 +32,14 @@ claude mcp add aseprite -- uv run --directory /path/to/AsepriteMCP aseprite-mcp
 
 See [`docs/SETUP.md`](docs/SETUP.md) for the file-access trust prompt Aseprite
 shows on first run, which previews depend on.
+
+For multiple simultaneous MCP sessions, start one shared server:
+
+```sh
+uv run aseprite-mcp --http 8766
+```
+
+Point each client's Streamable HTTP configuration at `http://127.0.0.1:8766/mcp`
+instead of launching separate stdio servers. Aseprite stays on bridge port
+`32145`. See [shared server setup](docs/SETUP.md#multiple-sessions-one-shared-http-server)
+for migration and shared-document behavior.
