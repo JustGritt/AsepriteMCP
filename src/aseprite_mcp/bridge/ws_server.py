@@ -41,8 +41,25 @@ MAX_FRAME_BYTES = 8 * 1024 * 1024
 # How long a freshly connected client has to identify itself before we drop it.
 HELLO_TIMEOUT = 10.0
 
-# How often a process that lost the race for the port checks whether it is free.
-PORT_RETRY_SECONDS = 2.0
+# How long the command that opens the port waits for Aseprite to attach. A
+# running extension redials at least every 5 s (maxreconnectwait in ws.lua).
+CONNECT_WAIT_SECONDS = 10.0
+
+# A port opened on demand is let go after this long without a command, so a
+# session used this morning does not hold Aseprite against one this afternoon.
+IDLE_RELEASE_SECONDS = 600.0
+
+# What to do when another server holds the port, which is almost always another
+# MCP session with this server configured.
+PORT_HELD_REMEDY = (
+    "Aseprite is attached to that process, usually another MCP client session with "
+    "this server configured. Close that session, or disable the aseprite server in it "
+    "(/mcp in Claude Code), then call again: this server takes the port on its next "
+    "command. To share one Aseprite between sessions, run one shared server with "
+    "`aseprite-mcp --http PORT` and point every client at its /mcp URL (docs/SETUP.md, "
+    "'Multiple sessions'). To run two copies of Aseprite on purpose, give one a different "
+    "ASEPRITE_MCP_PORT and enter that port in its File > MCP Bridge... dialog."
+)
 
 
 # The id an extension without instance support is filed under.
@@ -93,7 +110,9 @@ class AsepriteBridge:
         self._token = config.token or new_token()
         self._session: SessionFile | None = None
         self._bind_error: str | None = None
-        self._acquire_task: asyncio.Task | None = None
+        self._bind_lock = asyncio.Lock()
+        # Set while the port was opened by a command rather than by start().
+        self._idle_task: asyncio.Task | None = None
         directory = config.extension_dir
         self._extension = (
             ExtensionCopy(directory) if directory is not None and directory.is_dir() else None
@@ -125,32 +144,41 @@ class AsepriteBridge:
         log.info("Aseprite bridge listening on ws://%s:%s", self._config.host, port)
         return True
 
-    async def _keep_trying_to_bind(self) -> None:
-        """Take the port the moment whoever holds it lets go."""
-        while True:
-            await asyncio.sleep(PORT_RETRY_SECONDS)
-            if await self._bind():
-                return
-
     async def start(self) -> None:
-        """Start listening, or carry on without the port if it is taken.
+        """Listen now, or carry on without the port if it is taken.
+
+        The shared HTTP server calls this, since it exists to own the port. A
+        stdio server does not: it binds on its first command (see call()), so a
+        session that never touches Aseprite never holds the port against one
+        that does (#19).
 
         Binding used to be fatal, which made the whole server unusable under any
         MCP client that spawns more than one instance: the second process died
-        with Errno 10048 before it could answer tools/list, and the client showed
-        a server that had connected but had no tools. Codex CLI spawns two.
-
-        Only one process can own the port -- Aseprite's Lua WebSocket is a client
-        and has to dial a fixed address -- so the loser cannot serve the bridge.
-        But it can still serve the tool list and say clearly why calls fail, and
-        it takes over the moment the holder exits.
+        with Errno 10048 before it could answer tools/list. The loser still
+        serves the tool list and says clearly why calls fail.
         """
-        if await self._bind():
-            return
+        if not await self._bind():
+            log.warning("%s Serving tools without a bridge.", self._bind_error)
 
-        log.warning("%s Serving tools without a bridge; will take over if it exits.",
-                    self._bind_error)
-        self._acquire_task = asyncio.create_task(self._keep_trying_to_bind())
+    async def _bind_on_demand(self) -> None:
+        """Open the port for a command, then give Aseprite a moment to attach."""
+        async with self._bind_lock:
+            if self._server is not None or not await self._bind():
+                return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + CONNECT_WAIT_SECONDS
+        while not self._instances and loop.time() < deadline:
+            await asyncio.sleep(0.05)
+
+    async def _release_after_idle(self) -> None:
+        await asyncio.sleep(IDLE_RELEASE_SECONDS)
+        self._idle_task = None
+        log.info("No command in %gs; releasing the bridge port.", IDLE_RELEASE_SECONDS)
+        await self._release()
+
+    @property
+    def listening(self) -> bool:
+        return self._server is not None
 
     @property
     def bind_error(self) -> str | None:
@@ -158,13 +186,12 @@ class AsepriteBridge:
         return self._bind_error
 
     async def stop(self) -> None:
-        if self._acquire_task is not None:
-            self._acquire_task.cancel()
-            try:
-                await self._acquire_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
-            self._acquire_task = None
+        if self._idle_task is not None:
+            self._idle_task.cancel()
+            self._idle_task = None
+        await self._release()
+
+    async def _release(self) -> None:
         if self._session:
             self._session.remove()
             self._session = None
@@ -220,17 +247,15 @@ class AsepriteBridge:
         if self._bind_error:
             # Sending the user to check their extension would waste their time:
             # it is almost certainly connected, just to a different copy of this
-            # server. See start().
+            # server.
             return BridgeError(
-                ErrorCode.ASEPRITE_NOT_CONNECTED,
-                f"{self._bind_error} Aseprite is attached to that process rather "
-                "than this one, so commands cannot reach it from here. Call "
-                "get_connection_status for how to fix it.",
+                ErrorCode.ASEPRITE_NOT_CONNECTED, f"{self._bind_error} {PORT_HELD_REMEDY}"
             )
         return BridgeError(
             ErrorCode.ASEPRITE_NOT_CONNECTED,
             "No Aseprite extension is currently connected. Start Aseprite with the "
-            "aseprite-mcp extension installed and enabled, then try again.",
+            "aseprite-mcp extension installed and enabled, then try again. If it is "
+            "running, File > MCP Bridge... shows the address it dials and why it fails.",
         )
 
     def resolve(self, selected: str | None) -> Instance:
@@ -471,6 +496,15 @@ class AsepriteBridge:
         disconnection and timeout, so no caller has to tell transport errors
         apart from Aseprite errors.
         """
+        # A port start() opened is never released; one a command opened is.
+        on_demand = self._server is None or self._idle_task is not None
+        if self._server is None:
+            await self._bind_on_demand()
+        if on_demand and self._server is not None:
+            if self._idle_task is not None:
+                self._idle_task.cancel()
+            self._idle_task = asyncio.create_task(self._release_after_idle())
+
         target = self.resolve(instance)
         if command not in DIAGNOSTIC_COMMANDS:
             outdated = self._outdated(target)

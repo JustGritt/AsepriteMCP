@@ -152,6 +152,22 @@ does not install a background service or start automatically at login.
 claude mcp add aseprite -- uv run --directory /path/to/AsepriteMCP aseprite-mcp
 ```
 
+That registers the server at Claude Code's default **local** scope: only
+sessions started in this project get it. Prefer that to `-s user`, which starts
+a server in every session on the machine, in every project. Only one server can
+hold the bridge port, so with user scope a session in an unrelated project can
+end up with Aseprite while the one that wants to draw gets
+`ASEPRITE_NOT_CONNECTED`. Two sessions in the same project can still collide;
+the shared HTTP server above is the fix when you run several at once.
+
+A stdio server does not bind the bridge port at startup. It binds on its first
+Aseprite command, which then waits up to 10 seconds for Aseprite to attach, so a
+session that never draws never holds the port. After 10 minutes without a
+command it lets the port go again (Aseprite's dialog shows *Connecting...*), and
+the next command takes it back. If another session holds the port, the error
+says so and names the fix: close that session, or disable the server in it with
+`/mcp`, then call again.
+
 Order does not matter: the extension retries until the server appears, and
 reconnects on its own if the server restarts.
 
@@ -287,6 +303,13 @@ shown in **File > MCP Bridge...** under Instance.
 Aseprite is not running, the extension is not installed, or the bridge was
 switched off. Open **File > MCP Bridge...**: it reports the address it
 is dialling, whether anything is listening there, and the last error.
+
+If the message says another process is already listening, Aseprite is attached
+to a different copy of this server, usually another MCP session. Close that
+session or disable the server in it with `/mcp`, then call again: this one takes
+the port on its next command. `get_connection_status` reports
+`bridgePortOwnedElsewhere`. Changing the port only helps when you mean to run
+two copies of Aseprite, one per port.
 
 **The dialog flickers between Connected and Connecting**
 Two copies of Aseprite are dialling the same port with an extension too old to

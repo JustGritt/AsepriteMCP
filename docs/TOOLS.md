@@ -50,6 +50,10 @@ connected, `instances` lists each with its `id`, `name`, active `document`,
 open `documents` and `selected` flag; until the session chooses, the reply
 carries the `INSTANCE_REQUIRED` error instead of a document.
 
+It never opens the bridge port itself. Before the first Aseprite command it
+reports `listening: false`; when another server holds the port, it reports
+`bridgePortOwnedElsewhere` with the fix in `hint`.
+
 ### `select_instance(instance)`
 Chooses the Aseprite window this session drives, by its id, its name
 (`ASEPRITE_MCP_INSTANCE`), a unique id prefix, or the file name of a document it

@@ -13,7 +13,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from ..bridge.protocol import BridgeError, ErrorCode
-from ..bridge.ws_server import INSTALL_HINT, Instance
+from ..bridge.ws_server import CONNECT_WAIT_SECONDS, INSTALL_HINT, PORT_HELD_REMEDY, Instance
 from .base import ToolContext, as_json
 
 
@@ -61,26 +61,26 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         }
 
         if not ctx.bridge.connected:
-            # Never raise here: this is the tool the agent uses to diagnose, so it
-            # has to answer even when nothing is attached.
+            # Never raise here, and never bind: this is the tool the agent uses to
+            # diagnose, so it has to answer without changing what it reports on.
             if ctx.bridge.bind_error:
-                # This process lost the race for the port, so Aseprite is talking
-                # to a different one. Say so rather than sending the user off to
-                # check an extension that is working perfectly well.
+                # Aseprite is talking to a different copy of this server. Say so
+                # rather than sending the user off to check a working extension.
                 status["bridgePortOwnedElsewhere"] = True
+                status["hint"] = f"{ctx.bridge.bind_error} {PORT_HELD_REMEDY}"
+            elif not ctx.bridge.listening:
+                status["listening"] = False
                 status["hint"] = (
-                    f"{ctx.bridge.bind_error} Aseprite is connected to that process, "
-                    "not this one, so no command can reach it from here. This happens "
-                    "when another MCP session already runs its own copy of the server. "
-                    "To use Aseprite from several sessions at once, run one shared "
-                    "server with `aseprite-mcp --http PORT` and point every client at "
-                    "its /mcp URL (docs/SETUP.md, 'Multiple sessions')."
+                    "The bridge port opens on the first Aseprite command, which then waits "
+                    f"up to {CONNECT_WAIT_SECONDS:g}s for Aseprite to attach. Call "
+                    "get_sprite_info."
                 )
             else:
                 status["hint"] = (
-                    "Start Aseprite with the aseprite-mcp extension installed. The extension "
-                    "connects on its own within a few seconds and retries automatically. "
-                    "If it never connects, check Edit > Preferences > Extensions."
+                    "Start Aseprite with the aseprite-mcp extension installed; it connects "
+                    "within a few seconds. If Aseprite is running, File > MCP Bridge... "
+                    "shows the address it dials and why it fails. If the extension is "
+                    "missing there, check Edit > Preferences > Extensions."
                 )
             return as_json(status)
 

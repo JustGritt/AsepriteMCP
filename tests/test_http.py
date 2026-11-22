@@ -104,7 +104,7 @@ async def test_shared_startup_rejects_occupied_bridge(config, tmp_path, monkeypa
         with pytest.raises(RuntimeError, match="Stop the old stdio server"):
             async with mcp.settings.lifespan(mcp):
                 pytest.fail("shared server started without its bridge")
-        assert ctx.bridge._acquire_task is None
+        assert not ctx.bridge.listening
     finally:
         listener.close()
 

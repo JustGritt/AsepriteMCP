@@ -208,7 +208,10 @@ def build_server(config: Config | None = None, *, shared: bool = False) -> tuple
 
     @asynccontextmanager
     async def lifespan(_server: MCPServer):
-        await bridge.start()
+        # A stdio server binds on its first command instead, so a session that
+        # never uses Aseprite never holds the port (#19).
+        if shared:
+            await bridge.start()
         try:
             if shared and bridge.bind_error:
                 raise RuntimeError(
