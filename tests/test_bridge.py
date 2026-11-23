@@ -432,3 +432,89 @@ class TestInstances:
         finally:
             await a.stop()
             await b.stop()
+
+
+class TestHeartbeat:
+    """The server proves it is alive to extensions that ask (#18).
+
+    The extension cannot always see its socket die: with the server
+    force-killed, Aseprite on Windows sat "connected" for minutes. A heartbeat
+    gives it something to miss.
+    """
+
+    HELLO = {"type": "hello", "instance": "aaaaaa"}
+
+    @pytest.fixture(autouse=True)
+    def fast_heartbeat(self, monkeypatch):
+        from aseprite_mcp.bridge import ws_server
+
+        monkeypatch.setattr(ws_server, "HEARTBEAT_SECONDS", 0.05)
+
+    async def test_an_extension_that_asks_is_told_the_interval_and_gets_heartbeats(
+        self, server
+    ):
+        _mcp, ctx = server
+        async with connect(f"ws://127.0.0.1:{ctx.bridge.bound_port}/") as socket:
+            await socket.send(json.dumps({**self.HELLO, "capabilities": ["heartbeat"]}))
+            welcome = json.loads(await socket.recv())
+            assert welcome["ok"] is True
+            assert welcome["heartbeat"] == 0.05
+            for _ in range(3):
+                beat = json.loads(await asyncio.wait_for(socket.recv(), 1.0))
+                assert beat == {"type": "heartbeat"}, "no id, so it is never a request"
+
+    async def test_an_extension_that_does_not_ask_gets_none(self, server):
+        """An older extension would queue each heartbeat and answer it with an error."""
+        _mcp, ctx = server
+        async with connect(f"ws://127.0.0.1:{ctx.bridge.bound_port}/") as socket:
+            await socket.send(json.dumps({**self.HELLO, "capabilities": ["layer.uuid"]}))
+            welcome = json.loads(await socket.recv())
+            assert welcome["ok"] is True
+            assert "heartbeat" not in welcome, "nothing for the extension to time out on"
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(socket.recv(), 0.3)
+
+    async def test_heartbeats_interleave_with_calls(self, server):
+        _mcp, ctx = server
+        fake = FakeAseprite(instance="aaaaaa")
+        fake.hello["capabilities"] = ["layer.uuid", "heartbeat"]
+        await fake.start(ctx.bridge.bound_port, ctx.bridge.token)
+        try:
+            assert await wait_for(lambda: ctx.bridge.connected)
+            for frame in range(1, 6):
+                fake.reply("frame.select", {"frame": frame})
+                assert (await ctx.bridge.call("frame.select", {"frame": frame}))["frame"] == frame
+                await asyncio.sleep(0.03)
+            assert await wait_for(lambda: len(fake.notices) >= 3)
+            assert all(n == {"type": "heartbeat"} for n in fake.notices)
+            assert [r["command"] for r in fake.requests] == ["frame.select"] * 5
+        finally:
+            await fake.stop()
+
+    async def test_heartbeats_stop_with_the_socket(self, server):
+        _mcp, ctx = server
+
+        def beating() -> list[asyncio.Task]:
+            return [t for t in asyncio.all_tasks() if t.get_name().startswith("heartbeat ")]
+
+        async with connect(f"ws://127.0.0.1:{ctx.bridge.bound_port}/") as socket:
+            await socket.send(json.dumps({**self.HELLO, "capabilities": ["heartbeat"]}))
+            await socket.recv()
+            assert await wait_for(lambda: len(beating()) == 1)
+        assert await wait_for(lambda: not ctx.bridge.connected)
+        assert await wait_for(lambda: not beating()), "the heartbeat task outlived its socket"
+
+    async def test_a_superseded_socket_stops_beating(self, server):
+        _mcp, ctx = server
+        url = f"ws://127.0.0.1:{ctx.bridge.bound_port}/"
+        hello = json.dumps({**self.HELLO, "capabilities": ["heartbeat"]})
+        async with connect(url) as old, connect(url) as new:
+            await old.send(hello)
+            await old.recv()
+            await new.send(hello)
+            await new.recv()
+            assert await wait_for(
+                lambda: len([t for t in asyncio.all_tasks()
+                             if t.get_name().startswith("heartbeat ")]) == 1
+            ), "one window, one heartbeat"
+            assert json.loads(await asyncio.wait_for(new.recv(), 1.0)) == {"type": "heartbeat"}

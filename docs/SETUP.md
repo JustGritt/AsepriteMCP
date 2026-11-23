@@ -153,7 +153,16 @@ claude mcp add aseprite -- uv run --directory /path/to/AsepriteMCP aseprite-mcp
 ```
 
 Order does not matter: the extension retries until the server appears, and
-reconnects on its own if the server restarts.
+redials on its own when the server restarts.
+
+A server that is killed outright, rather than stopped, can leave the extension
+holding a socket that never reports closing. This was seen on Windows with
+`taskkill /F`. So the server also sends a heartbeat every 5 seconds, and the
+extension redials after 20 seconds without one. After a forced kill, expect up
+to about half a minute before the replacement server has Aseprite back. If it
+takes longer, press **Reconnect** in the connect dialog below. An extension
+older than the heartbeat has no such fallback. Reinstall it if
+`get_connection_status` reports it outdated.
 
 ## The connect dialog
 

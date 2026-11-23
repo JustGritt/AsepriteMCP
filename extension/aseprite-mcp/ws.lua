@@ -21,6 +21,27 @@ local PROTOCOL_VERSION = 1
 -- its own reconnect backoff; this only covers the case where it gave up.
 local RECONNECT_AFTER_SECONDS = 15
 
+-- Liveness (#18). A socket can die without a CLOSE ever reaching us: on Windows,
+-- with the server force-killed, Aseprite sat "connected" for minutes and never
+-- redialled, and only the Reconnect button brought it back. So the hello asks
+-- for heartbeats, the welcome says how often they come, and poll() rebuilds a
+-- socket that has heard nothing for this many of them.
+local MISSED_HEARTBEATS = 4
+-- Never less than this, whatever the server announces: os.time() counts whole
+-- seconds, so a tiny interval would make a rebuild out of rounding.
+local MIN_SILENCE_SECONDS = 10
+-- From OPEN to the welcome. A server that dies in between must not leave us
+-- "connected" either.
+local WELCOME_WITHIN_SECONDS = 20
+-- A gap this long between two polls means the pump itself was frozen: a long
+-- render, or anything else holding the UI thread. Nothing could be heard in that
+-- time, so it is not silence. Messages that arrived meanwhile are still queued
+-- behind the tick that froze, and get a fresh window to land in.
+local STALL_SECONDS = 3
+-- Control messages are a few dozen bytes; requests can be megabytes and are
+-- left for the pump to decode.
+local CONTROL_MAX_BYTES = 256
+
 --- Six hex characters naming this Aseprite process for as long as it runs.
 -- One server can hold several Aseprite windows, and each MCP session picks one
 -- by this id (or by ASEPRITE_MCP_INSTANCE, or by a document it has open). It
@@ -37,10 +58,22 @@ end
 return function(deps)
   local queue = deps.queue
   local trace = deps.trace
+  -- Injectable so the Lua tests can drive a fake socket through a fake clock.
+  local newWebSocket = deps.WebSocket or WebSocket
+  local clock = deps.clock or os.time
   local M = {}
 
   local socket = nil
   local connected = false
+  -- Bumped for every socket, so events from one already replaced are ignored. A
+  -- late CLOSE from the old socket would otherwise mark the new one closed, and
+  -- every reply would be dropped until the next rebuild.
+  local generation = 0
+  -- When the current socket last delivered anything, and how long it may then
+  -- stay quiet. nil: no limit, which is what a server without heartbeats gets.
+  local heardAt = nil
+  local silenceLimit = nil
+  local lastPoll = nil
   local lastError = nil
   local lastAttempt = nil
   -- The target actually dialled, which is not the resolved target between a
@@ -177,6 +210,9 @@ return function(deps)
     -- closing such a sprite can raise a modal that wedges the bridge. layerId()
     -- still degrades to nil at runtime if uuid turns out to be absent.
     if app.apiVersion >= 27 then capabilities[#capabilities + 1] = "layer.uuid" end
+    -- Not an Aseprite feature but a protocol one: asks the server for the
+    -- heartbeats poll() relies on. An older server ignores it.
+    capabilities[#capabilities + 1] = "heartbeat"
 
     socket:sendText(json.encode({
       type = "hello",
@@ -192,36 +228,82 @@ return function(deps)
     }))
   end
 
-  local function onReceive(messageType, data)
-    trace.writef("ws event type=%s len=%s",
-      tostring(messageType), data and tostring(#tostring(data)) or "nil")
+  --- A welcome or a heartbeat, decoded; nil for anything else, requests above all.
+  local function controlMessage(data)
+    if type(data) ~= "string" or #data > CONTROL_MAX_BYTES then return nil end
+    local decoded, message = pcall(json.decode, data)
+    -- Aseprite's json.decode returns userdata for an object, not a table; see
+    -- proto.isStructured for what a table-only check cost once already.
+    local kind = type(message)
+    if not decoded or (kind ~= "table" and kind ~= "userdata") then return nil end
+    if message.id ~= nil then return nil end
+    if message.type ~= "welcome" and message.type ~= "heartbeat" then return nil end
+    return message
+  end
+
+  --- How long the socket may stay quiet, from what the welcome announced.
+  local function limitFor(welcome)
+    local every = tonumber(welcome.heartbeat)
+    if welcome.ok ~= true or every == nil or every <= 0 then return nil end
+    return math.max(MIN_SILENCE_SECONDS, every * MISSED_HEARTBEATS)
+  end
+
+  local function onReceive(mine, messageType, data)
+    trace.writef("ws event type=%s len=%s%s",
+      tostring(messageType), data and tostring(#tostring(data)) or "nil",
+      mine == generation and "" or " (replaced socket, ignored)")
+    if mine ~= generation then return end
+
+    if messageType == WebSocketMessageType.CLOSE then
+      if connected then trace.write("socket closed") end
+      connected = false
+      silenceLimit = nil
+      return
+    end
+    if messageType == WebSocketMessageType.ERROR then
+      -- The client failing to reach the server, which is no sign of life from
+      -- it. Counting these would keep a dead socket "alive" for as long as the
+      -- client kept failing.
+      trace.writef("socket error: %s", tostring(data))
+      return
+    end
+    heardAt = clock()
+
     if messageType == WebSocketMessageType.OPEN then
       connected = true
       lastError = nil
+      silenceLimit = WELCOME_WITHIN_SECONDS
       trace.write("socket open; sending hello")
       sendHello()
     elseif messageType == WebSocketMessageType.TEXT then
-      -- Deliberately does nothing but enqueue: see queue.lua for why touching
-      -- app.* from this callback is unsafe.
-      queue.push(data)
-    elseif messageType == WebSocketMessageType.CLOSE then
-      if connected then trace.write("socket closed") end
-      connected = false
+      -- Nothing here touches app.*: see queue.lua for why that is unsafe from
+      -- this callback. Control messages stop here; everything else is queued.
+      local control = controlMessage(data)
+      if control == nil then
+        queue.push(data)
+      elseif control.type == "welcome" then
+        silenceLimit = limitFor(control)
+        trace.writef("welcome; silence limit %s", tostring(silenceLimit or "none"))
+      end
     end
   end
 
   local function disconnect()
+    -- First, so whatever close() makes the old socket report is ignored.
+    generation = generation + 1
     if socket then
-      pcall(function() socket:close() end)
+      local old = socket
+      pcall(function() old:close() end)
       socket = nil
     end
     connected = false
+    silenceLimit = nil
   end
 
   local function openSocket()
     disconnect()
     target = resolveTarget()
-    lastAttempt = os.time()
+    lastAttempt = clock()
     -- Cleared here rather than only on OPEN, or the dialog reads "Connecting"
     -- beside an error from ten minutes ago for the whole dial.
     lastError = nil
@@ -231,9 +313,10 @@ return function(deps)
       -- pump on every tick, forever, with tracing off by default.
       local url = string.format("ws://%s:%d/", target.host, target.port)
       trace.writef("dialling %s", url)
-      socket = WebSocket{
+      local mine = generation
+      socket = newWebSocket{
         url = url,
-        onreceive = onReceive,
+        onreceive = function(messageType, data) onReceive(mine, messageType, data) end,
         deflate = false,
         minreconnectwait = 0.5,
         maxreconnectwait = 5.0,
@@ -263,15 +346,30 @@ return function(deps)
   function M.isEnabled() return enabled end
 
   --- Called from the pump each tick. Cheap: the client reconnects on its own, so
-  --- this only rebuilds the socket if it has stayed down for a long stretch.
+  --- this only rebuilds the socket if it has stayed down for a long stretch, or
+  --- stayed up but gone quiet.
   function M.poll()
     if not enabled then return end
+    local now = clock()
+    if lastPoll ~= nil and heardAt ~= nil and now - lastPoll >= STALL_SECONDS then
+      trace.writef("pump was frozen for %ds; not counting it as silence", now - lastPoll)
+      heardAt = now
+    end
+    lastPoll = now
+
     if socket == nil then
       openSocket()
       return
     end
-    if not connected and os.time() - (lastAttempt or 0) >= RECONNECT_AFTER_SECONDS then
-      trace.write("still not connected; rebuilding the socket")
+    if not connected then
+      if now - (lastAttempt or 0) >= RECONNECT_AFTER_SECONDS then
+        trace.write("still not connected; rebuilding the socket")
+        openSocket()
+      end
+      return
+    end
+    if silenceLimit ~= nil and now - (heardAt or now) >= silenceLimit then
+      trace.writef("heard nothing for %ds; rebuilding the socket", now - heardAt)
       openSocket()
     end
   end

@@ -58,6 +58,10 @@ class TestConnection:
         assert payload["connected"] is False
         assert "hint" in payload
         assert payload["bridge"]["port"] == ctx.bridge.bound_port
+        # Aseprite may be running, attached to a server that died. "Start
+        # Aseprite" alone sent the user nowhere useful (#18).
+        assert "already running" in payload["hint"]
+        assert "Reconnect" in payload["hint"]
 
     async def test_reports_connected(self, server, aseprite):
         mcp, _ctx = server

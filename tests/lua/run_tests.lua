@@ -2512,6 +2512,182 @@ test("display text: the status markers are decided in exactly one place", functi
   equals(texts.handled, "0 commands (0 failed)", "and so is the counter")
 end)
 
+print("=== liveness ===")
+-- #18: a socket that dies without a CLOSE must still be redialled. Driven
+-- through a fake WebSocket and a fake clock, so the timings are exact and no
+-- server is needed. poll() is called once per fake second, as the pump would
+-- (sixty times a second, but the clock only counts whole seconds).
+local MT = WebSocketMessageType
+
+local function liveness()
+  local world = { now = 1000, sockets = {}, pushed = {} }
+  world.ws = dofile(app.fs.joinPath(EXT_DIR, "ws.lua"))({
+    queue = { push = function(raw) world.pushed[#world.pushed + 1] = raw end },
+    trace = noTrace,
+    clock = function() return world.now end,
+    WebSocket = function(options)
+      local fake = { options = options, sent = {}, closed = false }
+      function fake:connect() end
+      function fake:close() self.closed = true end
+      function fake:sendText(text) self.sent[#self.sent + 1] = text end
+      world.sockets[#world.sockets + 1] = fake
+      return fake
+    end,
+  })
+  function world.socket() return world.sockets[#world.sockets] end
+  function world.deliver(fake, messageType, data) fake.options.onreceive(messageType, data) end
+  --- Open the newest socket and answer its hello with a welcome.
+  function world.attach(welcome)
+    world.deliver(world.socket(), MT.OPEN)
+    if welcome then world.deliver(world.socket(), MT.TEXT, welcome) end
+  end
+  --- Let `seconds` pass a second at a time, with a heartbeat every `beat`.
+  function world.run(seconds, beat)
+    for _ = 1, seconds do
+      world.now = world.now + 1
+      if beat and world.now % beat == 0 then
+        world.deliver(world.socket(), MT.TEXT, '{"type":"heartbeat"}')
+      end
+      world.ws.poll()
+    end
+  end
+  world.ws.poll()
+  return world
+end
+
+local WELCOME_HB = '{"type":"welcome","ok":true,"protocolVersion":1,"heartbeat":5}'
+
+test("liveness: the hello asks for heartbeats", function()
+  local w = liveness()
+  w.deliver(w.socket(), MT.OPEN)
+  local hello = json.decode(w.socket().sent[1])
+  local asked = false
+  for _, name in ipairs(hello.capabilities) do asked = asked or name == "heartbeat" end
+  check(asked, "heartbeat is among the capabilities")
+end)
+
+test("liveness: a socket that goes quiet is rebuilt after four heartbeats", function()
+  local w = liveness()
+  w.attach(WELCOME_HB)
+  w.run(60, 5)
+  equals(#w.sockets, 1, "steady heartbeats keep the socket")
+  w.run(19)
+  equals(#w.sockets, 1, "19 s of silence is not enough")
+  check(w.ws.status().connected, "still reads connected")
+  w.run(1)
+  equals(#w.sockets, 2, "20 s of silence rebuilds")
+  check(w.sockets[1].closed, "and closes the old socket")
+  check(not w.ws.status().connected, "connecting again, not connected")
+  w.attach(WELCOME_HB)
+  check(w.ws.status().connected, "the new socket attaches")
+end)
+
+test("liveness: control messages never reach the queue, requests do", function()
+  local w = liveness()
+  w.attach(WELCOME_HB)
+  w.run(30, 5)
+  equals(#w.pushed, 0, "neither the welcome nor any heartbeat was queued")
+  local request = '{"id":7,"command":"app.status","params":{}}'
+  w.deliver(w.socket(), MT.TEXT, request)
+  equals(w.pushed[1], request, "a request is queued untouched")
+  w.deliver(w.socket(), MT.TEXT, '{"type":"log","message":"x"}')
+  equals(#w.pushed, 2, "an unknown notice still goes to the queue, as before")
+end)
+
+test("liveness: any message counts as hearing from the server", function()
+  local w = liveness()
+  w.attach(WELCOME_HB)
+  for _ = 1, 10 do
+    w.run(15)
+    w.deliver(w.socket(), MT.TEXT, '{"id":1,"command":"app.status","params":{}}')
+  end
+  equals(#w.sockets, 1, "requests alone keep it alive")
+end)
+
+test("liveness: the client's own errors are not word from the server", function()
+  local w = liveness()
+  w.attach(WELCOME_HB)
+  for _ = 1, 20 do
+    w.deliver(w.socket(), MT.ERROR, "Unable to connect")
+    w.run(1)
+  end
+  equals(#w.sockets, 2, "errors every second still let the silence limit expire")
+end)
+
+test("liveness: a server without heartbeats is never timed out", function()
+  local w = liveness()
+  w.attach('{"type":"welcome","ok":true,"protocolVersion":1}')
+  w.run(300)
+  equals(#w.sockets, 1, "five silent minutes, same socket")
+end)
+
+test("liveness: a server that dies before its welcome is redialled", function()
+  local w = liveness()
+  w.attach(nil)
+  w.run(19)
+  equals(#w.sockets, 1, "the welcome is not overdue yet")
+  w.run(1)
+  equals(#w.sockets, 2, "20 s with no welcome rebuilds")
+end)
+
+test("liveness: a frozen pump is not silence", function()
+  -- A long render holds the UI thread: no ticks, no socket callbacks. Whatever
+  -- arrived meanwhile is still queued behind the tick that froze.
+  local w = liveness()
+  w.attach(WELCOME_HB)
+  w.run(4)
+  w.now = w.now + 45
+  w.ws.poll()
+  equals(#w.sockets, 1, "45 s frozen in one tick does not rebuild")
+  w.run(19)
+  equals(#w.sockets, 1, "and the silence clock restarted when the pump came back")
+  w.run(1)
+  equals(#w.sockets, 2, "real silence after it still counts")
+end)
+
+test("liveness: a slow but running pump still detects silence", function()
+  local w = liveness()
+  w.attach(WELCOME_HB)
+  for _ = 1, 10 do
+    w.now = w.now + 2
+    w.ws.poll()
+  end
+  equals(#w.sockets, 2, "2 s gaps are under the stall threshold")
+end)
+
+test("liveness: a replaced socket's late events are ignored", function()
+  local w = liveness()
+  w.attach(WELCOME_HB)
+  w.run(20)
+  equals(#w.sockets, 2, "rebuilt")
+  local old, new = w.sockets[1], w.sockets[2]
+  w.attach(WELCOME_HB)
+  w.deliver(old, MT.CLOSE)
+  check(w.ws.status().connected, "the old socket's CLOSE does not disconnect the new one")
+  w.deliver(old, MT.TEXT, '{"id":3,"command":"app.status","params":{}}')
+  equals(#w.pushed, 0, "nor does a request it delivers late get run")
+  w.run(19, 5)
+  equals(#w.sockets, 2, "the new socket carries on")
+  check(new == w.socket(), "and stays current")
+end)
+
+test("liveness: a refused welcome sets no limit", function()
+  local w = liveness()
+  w.attach('{"type":"welcome","ok":false,"error":{"code":"UNAUTHORIZED","message":"x"}}')
+  w.run(100)
+  equals(#w.sockets, 1, "the server closes it; the client's own backoff takes over")
+end)
+
+test("liveness: disconnecting stops the clock", function()
+  local w = liveness()
+  w.attach(WELCOME_HB)
+  w.ws.setEnabled(false)
+  w.run(60)
+  equals(#w.sockets, 1, "no rebuild while switched off")
+  w.deliver(w.sockets[1], MT.CLOSE)
+  check(not w.ws.status().connected, "closed")
+end)
+
 -- ----------------------------------------------------------------------- teardown
 
 for _, path in ipairs(tempFiles) do os.remove(path) end

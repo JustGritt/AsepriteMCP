@@ -77,10 +77,16 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
                     "its /mcp URL (docs/SETUP.md, 'Multiple sessions')."
                 )
             else:
+                # Not "start Aseprite": it may well be running, attached to a
+                # server that died, and the user needs to know what to press (#18).
                 status["hint"] = (
-                    "Start Aseprite with the aseprite-mcp extension installed. The extension "
-                    "connects on its own within a few seconds and retries automatically. "
-                    "If it never connects, check Edit > Preferences > Extensions."
+                    "No Aseprite window is attached to this server. If Aseprite is not "
+                    "running, start it with the aseprite-mcp extension installed; it "
+                    "connects within a few seconds. If it is already running, its "
+                    "extension redials on its own within about 30 seconds of losing a "
+                    "server. If it still has not attached after that, ask the user to "
+                    "press File > MCP Bridge... > Reconnect in Aseprite, and to check "
+                    "the extension is enabled under Edit > Preferences > Extensions."
                 )
             return as_json(status)
 
