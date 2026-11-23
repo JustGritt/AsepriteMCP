@@ -116,21 +116,27 @@ local function copyFile(from, to)
   return true
 end
 
---- A PNG's pixels as they are on disk, as an RGB image, with its palette.
--- Returns nil plus a reason on failure.
+--- An image file's pixels as they are on disk, as an RGB image, with its
+-- palette. PNG, JPEG and the other formats Aseprite reads. Returns nil plus a
+-- reason on failure.
 --
 -- This opens a private copy, not the file itself, because the file may already
 -- be open in a tab. A tab can hold unsaved edits, or be stale after an export
 -- wrote over its file, and closing it afterwards would close the user's work.
-function M.readPng(path)
+-- The copy keeps the extension, which is how Aseprite picks the decoder, and is
+-- opened as one frame, so a numbered name never loads a sequence.
+function M.readImage(path)
   local active = app.sprite
-  local copy = app.fs.joinPath(app.fs.tempPath, "aseprite_mcp_sheet_source.png")
+  local extension = app.fs.fileExtension(path):lower()
+  local copy = app.fs.joinPath(app.fs.tempPath, "aseprite_mcp_image_source." .. extension)
   local copied, why = copyFile(path, copy)
   if not copied then return nil, why end
 
-  local opened, sprite = pcall(M.openSprite, copy)
+  local opened, sprite = pcall(function() return Sprite{ fromFile = copy, oneFrame = true } end)
   M.remove(copy)
-  if not opened or not sprite then return nil, "Aseprite could not decode it as a PNG." end
+  if not opened or not sprite then
+    return nil, string.format("Aseprite could not decode it as %s.", extension:upper())
+  end
 
   -- Drawing through the document handles every PNG flavour, indexed included.
   local image = Image(sprite.width, sprite.height, ColorMode.RGB)
@@ -141,5 +147,8 @@ function M.readPng(path)
   if active then pcall(function() app.sprite = active end) end
   return image, palette
 end
+
+--- A PNG, read as readImage reads any image. Kept for the sprite sheet tools.
+M.readPng = M.readImage
 
 return M

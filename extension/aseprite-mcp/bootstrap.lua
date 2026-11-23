@@ -41,6 +41,7 @@ return function()
     "commands/animation.lua",
     "commands/history.lua",
     "commands/rig.lua",
+    "commands/image.lua",
   }
   for _, path in ipairs(groups) do
     local commands = loadModule(path)(deps)

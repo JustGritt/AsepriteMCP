@@ -8,7 +8,8 @@ what is built, and what comes next.
 | Rigging: part layers, rest frame, poses, outline (section 3) | **Implemented**: `split_layer`, `define_rig`, `pose_frame`, `refresh_rig`, `get_region(by_layer=true)` |
 | Pose templates: one body's animations reused by another (section 3) | **Implemented**: `export_poses`, `import_poses` (#32) |
 | Motion presets beyond templates, landmarks (section 4) | Next |
-| Reference-to-sprite pipeline (section 2) | Proposed |
+| Reference images on a layer, snapped to a palette to trace (section 2) | **Implemented**: `import_image` (#23) |
+| Rest of the reference-to-sprite pipeline (section 2) | Proposed |
 | Directions (section 5) | Later: the art in use today is side-view only |
 
 ## Goal
@@ -64,7 +65,7 @@ every step the model has to re-read a drawing it has already changed.
 cannot reliably tell the near arm from the torso. It needs the structure handed
 to it, not inferred from colors.
 
-## 2. Reference to sprite (proposed)
+## 2. Reference to sprite (partly built)
 
 ```text
 1024x1024 master reference (optionally several views)
@@ -91,10 +92,16 @@ to it, not inferred from colors.
 
 What feeds the rig from here:
 
-- **`trace_reference`**: load a PNG, scale it to the canvas, snap it to the
-  sprite's palette and return `draw_rows` text. The model edits a grid instead
-  of estimating pixel positions from an image, which is the step it is worst
-  at.
+- **`import_image`** (built, #23): puts the master on a reference layer, scaled
+  to the canvas by averaging pixels, with a flat background keyed out
+  (`transparent="corner"`) and optionally snapped to the sprite's palette. Then
+  `get_region` on that layer returns it as `draw_rows` text: the model edits a
+  grid instead of estimating pixel positions from an image, which is the step
+  it is worst at. On a real 1024x1024 dragon master on magenta, keying the
+  corner color gave the same guide as the pipeline's RGBA export, in 8 palette
+  colors, in half a second. It is a guide, not finished art: the hand-drawn
+  sprite next to it still has the outline and cleaner forms a person or the
+  agent adds.
 - **Part segmentation** (SAM, human-parsing nodes in ComfyUI), downsampled by
   majority vote rather than averaging, gives a first label grid for
   `split_layer`.
@@ -340,7 +347,8 @@ and per-view files exist only for the views a character needs.
 4. **Attack key poses.** Anticipation, impact, recovery, and selective redraw
    for complex silhouettes.
 5. **Walk and run.** Foot contacts and landmark checks.
-6. **Reference pipeline.** `trace_reference`, segmentation into labels.
+6. **Reference pipeline.** `import_image` with palette snapping: done (#23).
+   Segmentation into labels next.
 7. **Directions.** Opposite side, then front and back, then diagonals, with
    shared anchors; then shared motion across views.
 8. **Model benchmarking.** The same assets, constraints and budgets across
