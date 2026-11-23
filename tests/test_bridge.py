@@ -538,6 +538,13 @@ class TestOnDemandBinding:
             await fake.stop()
             await bridge.stop()
 
+    def test_the_wait_outlasts_the_extensions_silence_limit(self):
+        """After a force-kill, Aseprite redials only once it misses heartbeats (#18)."""
+        from aseprite_mcp.bridge import ws_server
+
+        missed_heartbeats = 4  # MISSED_HEARTBEATS in ws.lua
+        assert ws_server.CONNECT_WAIT_SECONDS > ws_server.HEARTBEAT_SECONDS * missed_heartbeats
+
     async def test_the_wait_ends_when_nothing_attaches(self, bridge, monkeypatch):
         from aseprite_mcp.bridge import ws_server
 

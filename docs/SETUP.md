@@ -161,7 +161,7 @@ end up with Aseprite while the one that wants to draw gets
 the shared HTTP server above is the fix when you run several at once.
 
 A stdio server does not bind the bridge port at startup. It binds on its first
-Aseprite command, which then waits up to 10 seconds for Aseprite to attach, so a
+Aseprite command, which then waits up to 25 seconds for Aseprite to attach, so a
 session that never draws never holds the port. After 10 minutes without a
 command it lets the port go again (Aseprite's dialog shows *Connecting...*), and
 the next command takes it back. If another session holds the port, the error

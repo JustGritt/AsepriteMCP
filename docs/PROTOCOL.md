@@ -8,7 +8,7 @@ The server binds `ws://127.0.0.1:32145`; the extension dials out. See
 round that way.
 
 A stdio server binds on its first command rather than at startup, waits up to
-10 seconds (`CONNECT_WAIT_SECONDS`) for the extension to attach, and lets the
+25 seconds (`CONNECT_WAIT_SECONDS`) for the extension to attach, and lets the
 port go after 10 minutes without a command (`IDLE_RELEASE_SECONDS`). A process
 that cannot bind tries again on its next command; nothing retries in the
 background, so the session that wants Aseprite is the one that gets it. The

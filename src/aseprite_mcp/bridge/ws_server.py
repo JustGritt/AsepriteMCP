@@ -42,8 +42,10 @@ MAX_FRAME_BYTES = 8 * 1024 * 1024
 HELLO_TIMEOUT = 10.0
 
 # How long the command that opens the port waits for Aseprite to attach. A
-# running extension redials at least every 5 s (maxreconnectwait in ws.lua).
-CONNECT_WAIT_SECONDS = 10.0
+# running extension redials at least every 5 s (maxreconnectwait in ws.lua), but
+# one still holding a socket to a force-killed server first has to go 20 s
+# without a heartbeat (#18). Ends as soon as Aseprite attaches.
+CONNECT_WAIT_SECONDS = 25.0
 
 # A port opened on demand is let go after this long without a command, so a
 # session used this morning does not hold Aseprite against one this afternoon.
