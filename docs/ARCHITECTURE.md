@@ -36,6 +36,42 @@ active .aseprite document
 `src/aseprite_mcp/` is the server; `extension/aseprite-mcp/` is the Lua side.
 Neither trusts the other to have validated anything.
 
+## Several windows, several sessions
+
+`aseprite-mcp --http PORT` (see Shape) lets several MCP clients share one server
+and one bridge. On its own, that still gives them one Aseprite window, and so
+one active document. Several windows can attach to the same bridge as well:
+
+```
+MCP client A ─┐                                      ┌─ Aseprite window a1b2c3
+MCP client B ─┼─ HTTP /mcp ── Python server ── ws ───┼─ Aseprite window d4e5f6
+MCP client C ─┘   (one process, one bridge, 32145)   └─ ...
+```
+
+The design follows unity-mcp's HTTP mode:
+
+- **Windows register.** The hello carries an `instance` id per Aseprite process
+  (PROTOCOL.md). The bridge keeps a table of live sockets keyed by it, so a
+  window is listed exactly as long as its socket is open, and a window that
+  reconnects replaces its own entry and nobody else's. A window that leaves
+  fails only the calls waiting on it.
+- **Sessions choose.** A call goes to the window named on the call
+  (`aseprite_instance`), else the one the session picked with
+  `select_instance`, else the only window connected. With several connected and
+  no choice, the call fails with `INSTANCE_REQUIRED` and the list of windows.
+  It never guesses: a guess is an edit landing in another agent's sprite.
+- **The choice is session memory.** `ToolContext.instance` is swapped in and
+  out with the legends and preview history, keyed on the transport-validated
+  `mcp-session-id`. Not on a client-supplied id, which two clients can share
+  (unity-mcp issue 1023), and not on the SDK's per-request session proxy, which
+  is rebuilt for every call.
+- **Sessionless clients name the window per call.** On the 2026-07-28 protocol
+  each call is a self-contained POST with no session id, so it gets fresh
+  memory and nothing chosen carries over. `aseprite_instance` covers that. The
+  server strips it before validation, so no tool schema pays for it.
+- **No scheduler.** Whole tool calls are already serialized, so windows take
+  turns at the server; Aseprite runs one command at a time from its own queue.
+
 ## The six corrections
 
 ### 1. The WebSocket points the other way

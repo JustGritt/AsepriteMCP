@@ -39,6 +39,9 @@ class ErrorCode(str, Enum):
     PROTOCOL_ERROR = "PROTOCOL_ERROR"
     LUA_ERROR = "LUA_ERROR"
     UNAUTHORIZED = "UNAUTHORIZED"
+    # Server-side only: several Aseprite windows are connected and the session
+    # has not chosen one, so a command has nowhere safe to go.
+    INSTANCE_REQUIRED = "INSTANCE_REQUIRED"
 
 
 class BridgeError(ToolError):

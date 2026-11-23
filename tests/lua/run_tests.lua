@@ -177,6 +177,18 @@ test("sprite.open replies with the same overview as sprite.info", function()
   app.sprite:close()
 end)
 
+test("app.status lists the open documents", function()
+  for _, s in ipairs(app.sprites) do s:close() end
+  local a = newSprite(4, 4)
+  local b = newSprite(4, 4)
+  local status = call("app.status")
+  equals(status.openDocuments, 2, "two documents")
+  equals(#status.documents, 2, "both listed by name")
+  equals(status.documents[2], app.fs.fileName(b.filename), "in open order")
+  a:close()
+  b:close()
+end)
+
 test("app.status without a document", function()
   for _, s in ipairs(app.sprites) do s:close() end
   local status = call("app.status")
@@ -1950,6 +1962,15 @@ local noTrace = {
 local ws = dofile(app.fs.joinPath(EXT_DIR, "ws.lua"))({ queue = queue, trace = noTrace })
 local dialog = dofile(app.fs.joinPath(EXT_DIR, "dialog.lua"))({ trace = noTrace })
 
+test("instance: one id per process, sent in the status", function()
+  local id = ws.instanceId()
+  check(type(id) == "string" and id:match("^%x%x%x%x%x%x$") ~= nil, "six hex characters: " .. tostring(id))
+  equals(ws.instanceId(), id, "stable across calls")
+  equals(ws.status().instance, id, "reported in the status the dialog reads")
+  local other = dofile(app.fs.joinPath(EXT_DIR, "ws.lua"))({ queue = queue, trace = noTrace })
+  check(other.instanceId() ~= id, "another module instance gets another id")
+end)
+
 test("resolve: the built-in default when nothing else is set", function()
   local t = ws.resolve(nil, nil, nil, nil)
   equals(t.host, "127.0.0.1", "default host")
@@ -2131,6 +2152,13 @@ end)
 test("view model: a resolved target the socket is not on yet", function()
   local note = vm({ connected = true, port = 40000, activePort = 32145 }).serverNote
   check(note:find("press Reconnect") ~= nil, "asks for it to be applied: " .. note)
+end)
+
+test("view model: the instance row names this window", function()
+  equals(vm({ instance = "a1b2c3" }).instanceText, "a1b2c3", "the id alone")
+  equals(vm({ instance = "a1b2c3", instanceName = "knight" }).instanceText, "knight (a1b2c3)",
+    "a name from ASEPRITE_MCP_INSTANCE leads")
+  equals(dialog.displayText(vm({ instance = "a1b2c3" })).instance, "a1b2c3", "shown as is")
 end)
 
 test("view model: the handled counter", function()

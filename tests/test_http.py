@@ -107,3 +107,68 @@ async def test_shared_startup_rejects_occupied_bridge(config, tmp_path, monkeypa
         assert ctx.bridge._acquire_task is None
     finally:
         listener.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_http_gives_each_session_its_own_window(config, tmp_path, monkeypatch):
+    """Two Aseprite windows on the shared bridge, each session driving the one it chose."""
+    import json
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    mcp, ctx = build_server(config, shared=True)
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+    http = uvicorn.Server(uvicorn.Config(mcp.streamable_http_app(), log_level="error"))
+    task = asyncio.create_task(http.serve(sockets=[listener]))
+    windows = []
+    for instance, document in (("aaaaaa", "knight.aseprite"), ("bbbbbb", "dragon.aseprite")):
+        fake = FakeAseprite(instance=instance)
+        fake.reply("app.status", {"documentOpen": True, "document": document,
+                                  "documents": [document]})
+        fake.reply("sprite.info", {"from": instance})
+        windows.append(fake)
+
+    def text(result):
+        return "".join(b.text for b in result.content if getattr(b, "type", None) == "text")
+
+    try:
+        while not http.started:
+            if task.done():
+                await task
+            await asyncio.sleep(0.01)
+        for fake in windows:
+            await fake.start(ctx.bridge.bound_port, ctx.bridge.token)
+        while len(ctx.bridge.instances) < 2:
+            await asyncio.sleep(0.01)
+
+        async with client(f"http://127.0.0.1:{port}/mcp") as a:
+            async with client(f"http://127.0.0.1:{port}/mcp") as b:
+                refused = await a.call_tool("get_sprite_info", {})
+                assert refused.is_error and "INSTANCE_REQUIRED" in text(refused)
+
+                assert not (await a.call_tool("select_instance",
+                                              {"instance": "knight.aseprite"})).is_error
+                assert not (await b.call_tool("select_instance", {"instance": "bbb"})).is_error
+                first, second = await asyncio.gather(a.call_tool("get_sprite_info", {}),
+                                                     b.call_tool("get_sprite_info", {}))
+                assert json.loads(text(first))["from"] == "aaaaaa"
+                assert json.loads(text(second))["from"] == "bbbbbb"
+
+                # A batch goes, whole, to its own session's window.
+                args = {"x": 0, "y": 0, "rows": ["r"], "legend": {"r": "#ff0000"}}
+                assert not (await b.call_tool("batch", {"ops": [
+                    {"tool": "draw_rows", "args": args}]})).is_error
+                # And a sessionless call can still name a window on the call.
+                named = await a.call_tool("get_sprite_info", {"aseprite_instance": "bbbbbb"})
+                assert json.loads(text(named))["from"] == "bbbbbb"
+
+        sent = lambda fake: [r["command"] for r in fake.requests if r["command"] != "app.status"]
+        assert sent(windows[0]) == ["sprite.info"]
+        assert sent(windows[1]) == ["sprite.info", "batch.run", "sprite.info"]
+    finally:
+        for fake in windows:
+            await fake.stop()
+        http.should_exit = True
+        await asyncio.wait_for(task, 10)
+        listener.close()

@@ -30,7 +30,9 @@ from tests.conftest import text_of, tiny_png
 #   by_layer), ~2 480 bytes: without it an agent animated each character through
 #   hundreds of lines of throwaway pixel scripts and full-frame draw_rows
 #   (docs/ANIMATION.md).
-TOOL_LIST_BUDGET = 17_900
+# - select_instance, ~330 bytes: without it, two Aseprite windows on one server
+#   cannot be told apart and every call is refused (docs/SETUP.md).
+TOOL_LIST_BUDGET = 18_250
 
 
 def compact(value) -> int:

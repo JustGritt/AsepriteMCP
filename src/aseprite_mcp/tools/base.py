@@ -40,12 +40,22 @@ _recording: ContextVar[list[tuple[str, dict[str, Any]]] | None] = ContextVar(
 MAX_REMEMBERED_IMAGES = 64
 
 
+# A window named on the call itself (aseprite_instance), which outranks the
+# session's choice. Set by AsepriteServer.call_tool; see INSTANCE_ARGUMENT there.
+_instance_override: ContextVar[str | None] = ContextVar(
+    "aseprite_mcp_instance_override", default=None
+)
+
+
 @dataclass
 class ToolContext:
     """Everything a tool needs, in one injectable object."""
 
     bridge: AsepriteBridge
     config: Config
+    # The Aseprite window this session drives, from select_instance; None means
+    # "the only one connected". Per HTTP session, like the memory below.
+    instance: str | None = field(default=None, init=False, repr=False)
     # The most recent draw_rows legend, so a run of edits in the same colors does
     # not have to restate it. Memory only: it is gone when the server restarts.
     last_legend: dict[str, str | int] | None = field(default=None, init=False, repr=False)
@@ -77,7 +87,19 @@ class ToolContext:
         if recording is not None:
             recording.append((command, dict(params or {})))
             return {}
-        return await self.bridge.call(command, params, timeout=timeout)
+        return await self.bridge.call(
+            command, params, timeout=timeout, instance=self.selected_instance()
+        )
+
+    def selected_instance(self) -> str | None:
+        """The window this call goes to: named on the call, else the session's choice."""
+        override = _instance_override.get()
+        if override is None:
+            return self.instance
+        # Accept a name or id prefix as select_instance does. Unmatched, it goes
+        # through as given, and the bridge reports it as not connected.
+        matched = self.bridge.match(override)
+        return matched.id if matched else override
 
     def image_or_note(self, image: Image, label: str) -> Image | str:
         """The image, or one line of text when the agent already has this exact image.

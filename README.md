@@ -49,3 +49,8 @@ Point each client's Streamable HTTP configuration at `http://127.0.0.1:8766/mcp`
 instead of launching separate stdio servers. Aseprite stays on bridge port
 `32145`. See [shared server setup](docs/SETUP.md#multiple-sessions-one-shared-http-server)
 for migration and shared-document behavior.
+
+To keep agents off each other's sprites, open one Aseprite window per agent.
+Every window connects to the shared server; each session picks its own with
+`select_instance` (by the id shown in **File > MCP Bridge...**, a name from
+`ASEPRITE_MCP_INSTANCE`, or a document it has open).

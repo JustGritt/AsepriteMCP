@@ -1,11 +1,45 @@
-"""Connection status (spec section 24)."""
+"""Connection status and window selection (spec section 24).
+
+One server can hold several Aseprite windows, and over HTTP several MCP
+sessions share it. Each session drives one window: the only one connected, or
+the one it chose with select_instance. Choosing is never guessed for it.
+"""
 
 from __future__ import annotations
 
+import asyncio
+from typing import Any
+
 from mcp.server.mcpserver import MCPServer
 
-from ..bridge.protocol import BridgeError
+from ..bridge.protocol import BridgeError, ErrorCode
+from ..bridge.ws_server import Instance
 from .base import ToolContext, as_json
+
+
+async def _status_of(ctx: ToolContext, instance: Instance) -> dict[str, Any]:
+    """What one window has open, or the error that stopped us finding out."""
+    try:
+        return await ctx.bridge.call("app.status", instance=instance.id)
+    except BridgeError as exc:
+        return {"error": exc.code.value}
+
+
+async def _describe_all(ctx: ToolContext) -> list[dict[str, Any]]:
+    instances = ctx.bridge.instances
+    statuses = await asyncio.gather(*(_status_of(ctx, i) for i in instances))
+    selected = ctx.selected_instance()
+    out = []
+    for instance, status in zip(instances, statuses):
+        out.append({
+            "id": instance.id,
+            "name": instance.name,
+            "document": status.get("document"),
+            "documents": status.get("documents"),
+            "error": status.get("error"),
+            "selected": True if instance.id == selected else None,
+        })
+    return out
 
 
 def register(mcp: MCPServer, ctx: ToolContext) -> None:
@@ -13,11 +47,12 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         title="Get connection status",
         description=(
             "Whether Aseprite is connected, which document is open and whether previews can "
-            "be written. Call it first when a tool reports ASEPRITE_NOT_CONNECTED."
+            "be written. Call it first when a tool reports ASEPRITE_NOT_CONNECTED or "
+            "INSTANCE_REQUIRED."
         ),
     )
     async def get_connection_status() -> str:
-        status = {
+        status: dict[str, Any] = {
             "connected": ctx.bridge.connected,
             "bridge": {"host": ctx.config.host, "port": ctx.bridge.bound_port},
             "allowedDirectories": [str(d) for d in ctx.config.allowed_dirs],
@@ -34,10 +69,10 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
                 status["hint"] = (
                     f"{ctx.bridge.bind_error} Aseprite is connected to that process, "
                     "not this one, so no command can reach it from here. This happens "
-                    "when an MCP client starts more than one copy of the server, or "
-                    "when two clients are configured with the same port. Give one of "
-                    "them a different ASEPRITE_MCP_PORT and enter the matching port in "
-                    "Aseprite's File > MCP Bridge... dialog."
+                    "when another MCP session already runs its own copy of the server. "
+                    "To use Aseprite from several sessions at once, run one shared "
+                    "server with `aseprite-mcp --http PORT` and point every client at "
+                    "its /mcp URL (docs/SETUP.md, 'Multiple sessions')."
                 )
             else:
                 status["hint"] = (
@@ -47,7 +82,21 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
                 )
             return as_json(status)
 
-        status.update(ctx.bridge.client_info)
+        selected = ctx.selected_instance()
+        if len(ctx.bridge.instances) > 1 or selected is not None:
+            status["instances"] = await _describe_all(ctx)
+        try:
+            target = ctx.bridge.resolve(selected)
+        except BridgeError as exc:
+            status["error"] = exc.to_dict()
+            status["hint"] = (
+                "Several Aseprite windows are connected. Call select_instance with the id, "
+                "name or an open document of the one this session should drive."
+            )
+            return as_json(status)
+
+        status["instance"] = target.id
+        status.update(target.info)
         try:
             status.update(await ctx.call("app.status"))
         except BridgeError as exc:
@@ -70,3 +119,45 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
                 "tick 'Give full trust to this script' and allow it. See docs/SETUP.md."
             )
         return as_json(status)
+
+    @mcp.tool(
+        title="Select instance",
+        description=(
+            "Pick the Aseprite window this session drives when several are connected, by "
+            "id, name or the file name of a document it has open."
+        ),
+    )
+    async def select_instance(instance: str) -> str:
+        if not ctx.bridge.connected:
+            raise BridgeError(
+                ErrorCode.ASEPRITE_NOT_CONNECTED, "No Aseprite window is connected."
+            )
+        chosen = ctx.bridge.match(instance)
+        if chosen is None:
+            # Not an id or a name: try the documents each window has open.
+            described = await _describe_all(ctx)
+            holding = [
+                d for d in described
+                if instance == d.get("document") or instance in (d.get("documents") or [])
+            ]
+            if len(holding) > 1:
+                raise BridgeError(
+                    ErrorCode.INVALID_PARAMS,
+                    f"More than one Aseprite window has {instance!r} open: "
+                    f"{', '.join(d['id'] for d in holding)}. Use the id.",
+                )
+            if not holding:
+                raise BridgeError(
+                    ErrorCode.INVALID_PARAMS,
+                    f"No connected Aseprite window matches {instance!r} by id, name or open "
+                    f"document. Connected: {as_json(described)}",
+                )
+            chosen = ctx.bridge.match(holding[0]["id"])
+            assert chosen is not None
+        ctx.instance = chosen.id
+        status = await _status_of(ctx, chosen)
+        return as_json({
+            "selected": chosen.id,
+            "name": chosen.name,
+            "document": status.get("document"),
+        })

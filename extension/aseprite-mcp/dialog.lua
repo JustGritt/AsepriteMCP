@@ -147,6 +147,11 @@ return function(deps)
       -- indistinguishable from "no server" without this line.
       tokenText = status.usingToken and "on (environment)" or "off",
 
+      -- What an agent selects this window by when one server holds several.
+      instanceText = status.instanceName
+        and string.format("%s (%s)", status.instanceName, tostring(status.instance))
+        or tostring(status.instance or "?"),
+
       handledText = string.format("%s (%d failed)",
         commands(stats.handled), stats.failed),
 
@@ -173,6 +178,7 @@ return function(deps)
       files = (vm.filesOk and DOT_OK or DOT_BAD) .. " " .. vm.filesText,
       filesHint = vm.filesHint,
       token = vm.tokenText,
+      instance = vm.instanceText,
       handled = vm.handledText,
       toggle = vm.toggleText,
       error = vm.errorText,
@@ -377,6 +383,7 @@ return function(deps)
     dlg:label{ id = "files", label = "Files:", text = DOT_BAD .. " Not trusted" }
     dlg:label{ id = "filesHint", label = "", text = WIDEST_LINE }
     dlg:label{ id = "token", label = "Token:", text = "off" }
+    dlg:label{ id = "instance", label = "Instance:", text = tostring(status.instance or "?") }
     dlg:label{ id = "handled", label = "Handled:", text = "0 commands (0 failed)" }
     dlg:label{ id = "error", label = "", text = WIDEST_LINE }
     dlg:check{

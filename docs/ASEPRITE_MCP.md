@@ -172,7 +172,8 @@ The initial version does NOT need:
 - complex selections
 - scripting arbitrary Lua
 - arbitrary CLI execution
-- integration with multiple Aseprite processes
+- integration with multiple Aseprite processes (since built: see ARCHITECTURE.md,
+  "Several windows, several sessions")
 - multi-user networking
 - cloud communication
 - remote WebSocket access

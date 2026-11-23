@@ -1327,6 +1327,109 @@ class TestRig:
         assert [op["command"] for op in ops] == ["frame.create", "rig.pose", "rig.refresh"]
 
 
+# ------------------------------------------------------------------ instances
+
+
+class TestInstances:
+    """Several Aseprite windows, each MCP session driving the one it chose."""
+
+    @staticmethod
+    async def windows(ctx, *specs):
+        import asyncio as _asyncio
+
+        from tests.conftest import FakeAseprite
+
+        fakes = []
+        for instance, name, documents in specs:
+            fake = FakeAseprite(instance=instance, name=name)
+            fake.reply("app.status", {"documentOpen": True, "document": documents[0],
+                                      "documents": documents})
+            await fake.start(ctx.bridge.bound_port, ctx.bridge.token)
+            fakes.append(fake)
+        for _ in range(200):
+            if len(ctx.bridge.instances) == len(specs):
+                break
+            await _asyncio.sleep(0.01)
+        assert len(ctx.bridge.instances) == len(specs)
+        return fakes
+
+    async def test_status_lists_the_windows_and_asks_for_a_choice(self, server):
+        mcp, ctx = server
+        fakes = await self.windows(ctx, ("aaaaaa", "knight", ["knight.aseprite"]),
+                                   ("bbbbbb", None, ["dragon.aseprite", "fx.aseprite"]))
+        try:
+            status = json_of(await ok(mcp, "get_connection_status"))
+            assert [w["id"] for w in status["instances"]] == ["aaaaaa", "bbbbbb"]
+            assert status["instances"][1]["documents"] == ["dragon.aseprite", "fx.aseprite"]
+            assert status["error"]["code"] == "INSTANCE_REQUIRED"
+            assert "select_instance" in status["hint"]
+            assert "INSTANCE_REQUIRED" in await err(mcp, "get_sprite_info")
+        finally:
+            for fake in fakes:
+                await fake.stop()
+
+    async def test_one_window_needs_no_choice_and_stays_compact(self, server):
+        mcp, ctx = server
+        (fake,) = await self.windows(ctx, ("aaaaaa", None, ["knight.aseprite"]))
+        try:
+            status = json_of(await ok(mcp, "get_connection_status"))
+            assert status["instance"] == "aaaaaa"
+            assert "instances" not in status, "one window: no list to pay for"
+            assert status["document"] == "knight.aseprite"
+        finally:
+            await fake.stop()
+
+    @pytest.mark.parametrize("selector", ["bbbbbb", "bbb", "sprites", "dragon.aseprite"])
+    async def test_select_by_id_prefix_name_or_document(self, server, selector):
+        mcp, ctx = server
+        fakes = await self.windows(ctx, ("aaaaaa", "knight", ["knight.aseprite"]),
+                                   ("bbbbbb", "sprites", ["dragon.aseprite"]))
+        try:
+            payload = json_of(await ok(mcp, "select_instance", instance=selector))
+            assert payload["selected"] == "bbbbbb"
+            fakes[1].reply("sprite.info", {"from": "b"})
+            assert json_of(await ok(mcp, "get_sprite_info"))["from"] == "b"
+            status = json_of(await ok(mcp, "get_connection_status"))
+            assert status["instance"] == "bbbbbb"
+            assert status["instances"][1]["selected"] is True
+        finally:
+            for fake in fakes:
+                await fake.stop()
+
+    async def test_select_refuses_what_it_cannot_pin_down(self, server):
+        mcp, ctx = server
+        fakes = await self.windows(ctx, ("aaaaaa", None, ["shared.aseprite"]),
+                                   ("bbbbbb", None, ["shared.aseprite"]))
+        try:
+            assert "More than one" in await err(mcp, "select_instance", instance="shared.aseprite")
+            assert "No connected Aseprite window" in await err(
+                mcp, "select_instance", instance="nope.aseprite")
+        finally:
+            for fake in fakes:
+                await fake.stop()
+
+    async def test_a_window_named_on_the_call_needs_no_session(self, server):
+        """For clients on the sessionless protocol: aseprite_instance on each call."""
+        mcp, ctx = server
+        fakes = await self.windows(ctx, ("aaaaaa", "knight", ["knight.aseprite"]),
+                                   ("bbbbbb", None, ["dragon.aseprite"]))
+        try:
+            fakes[1].reply("sprite.info", {"from": "b"})
+            payload = json_of(await ok(mcp, "get_sprite_info", aseprite_instance="bbb"))
+            assert payload["from"] == "b", "a unique id prefix is enough"
+            fakes[0].reply("batch.run", {"applied": 1})
+            await ok(mcp, "batch", ops=[{"tool": "shift_cel", "args": {"dx": 1}}],
+                     aseprite_instance="knight")
+            assert [r["command"] for r in fakes[0].requests] == ["batch.run"], (
+                "the batch's ops went where the batch was sent"
+            )
+            assert "cccccc" in await err(mcp, "get_sprite_info", aseprite_instance="cccccc")
+            assert "INSTANCE_REQUIRED" in await err(mcp, "get_sprite_info")
+        finally:
+            for fake in fakes:
+                await fake.stop()
+
+
 MINIMAL_ARGUMENTS = {
     "get_connection_status": {},
     "get_sprite_info": {},
@@ -1373,6 +1476,7 @@ MINIMAL_ARGUMENTS = {
     "define_rig": {"parts": ["torso", "head"]},
     "pose_frame": {"frame": 2},
     "refresh_rig": {},
+    "select_instance": {"instance": "aseprite"},
 }
 
 

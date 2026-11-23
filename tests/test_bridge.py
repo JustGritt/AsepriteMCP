@@ -310,3 +310,125 @@ class TestContestedPort:
         finally:
             await second.stop()
             await first.stop()
+
+
+class TestInstances:
+    """Several Aseprite windows on one bridge, each chosen by id."""
+
+    @staticmethod
+    async def attach(ctx, instance=None, name=None) -> FakeAseprite:
+        fake = FakeAseprite(instance=instance, name=name)
+        before = len(ctx.bridge.instances)
+        await fake.start(ctx.bridge.bound_port, ctx.bridge.token)
+        key = instance or "aseprite"
+        assert await wait_for(lambda: any(i.id == key for i in ctx.bridge.instances))
+        assert len(ctx.bridge.instances) >= before
+        return fake
+
+    async def test_windows_with_their_own_ids_coexist(self, server):
+        _mcp, ctx = server
+        a = await self.attach(ctx, "aaaaaa", "knight")
+        b = await self.attach(ctx, "bbbbbb")
+        try:
+            assert [i.id for i in ctx.bridge.instances] == ["aaaaaa", "bbbbbb"]
+            assert ctx.bridge.instances[0].label == "knight (aaaaaa)"
+            a.reply("sprite.info", {"from": "a"})
+            b.reply("sprite.info", {"from": "b"})
+            assert (await ctx.bridge.call("sprite.info", instance="aaaaaa"))["from"] == "a"
+            assert (await ctx.bridge.call("sprite.info", instance="bbbbbb"))["from"] == "b"
+        finally:
+            await a.stop()
+            await b.stop()
+
+    async def test_several_windows_and_no_choice_is_refused(self, server):
+        _mcp, ctx = server
+        a = await self.attach(ctx, "aaaaaa")
+        b = await self.attach(ctx, "bbbbbb", "dragon")
+        try:
+            with pytest.raises(BridgeError) as excinfo:
+                await ctx.bridge.call("sprite.info")
+            assert excinfo.value.code is ErrorCode.INSTANCE_REQUIRED
+            assert "aaaaaa" in excinfo.value.message and "dragon (bbbbbb)" in excinfo.value.message
+            assert not a.requests and not b.requests, "nothing may be sent on a guess"
+        finally:
+            await a.stop()
+            await b.stop()
+
+    async def test_the_only_window_needs_no_choice(self, server):
+        _mcp, ctx = server
+        a = await self.attach(ctx, "aaaaaa")
+        try:
+            a.reply("sprite.info", {"from": "a"})
+            assert (await ctx.bridge.call("sprite.info"))["from"] == "a"
+        finally:
+            await a.stop()
+
+    async def test_a_chosen_window_that_left_is_named(self, server):
+        _mcp, ctx = server
+        a = await self.attach(ctx, "aaaaaa")
+        try:
+            with pytest.raises(BridgeError) as excinfo:
+                await ctx.bridge.call("sprite.info", instance="cccccc")
+            assert excinfo.value.code is ErrorCode.ASEPRITE_NOT_CONNECTED
+            assert "cccccc" in excinfo.value.message and "aaaaaa" in excinfo.value.message
+        finally:
+            await a.stop()
+
+    async def test_the_same_window_reconnecting_replaces_its_socket(self, server):
+        _mcp, ctx = server
+        old = await self.attach(ctx, "aaaaaa")
+        new = FakeAseprite(instance="aaaaaa")
+        await new.start(ctx.bridge.bound_port, ctx.bridge.token)
+        try:
+            assert await wait_for(
+                lambda: len(ctx.bridge.instances) == 1
+                and ctx.bridge.instances[0].websocket is not None
+                and not old.requests
+            )
+            new.reply("sprite.info", {"from": "new"})
+            assert (await ctx.bridge.call("sprite.info"))["from"] == "new"
+            assert len(ctx.bridge.instances) == 1
+        finally:
+            await old.stop()
+            await new.stop()
+
+    async def test_a_window_leaving_fails_only_its_own_calls(self, server):
+        _mcp, ctx = server
+        a = await self.attach(ctx, "aaaaaa")
+        b = await self.attach(ctx, "bbbbbb")
+
+        async def close_on_request():
+            async for raw in a._socket:
+                a.requests.append(json.loads(raw))
+                await a._socket.close()
+
+        a._task.cancel()
+        a._task = asyncio.create_task(close_on_request())
+        try:
+            b.reply("sprite.info", {"from": "b"})
+            lost, kept = await asyncio.gather(
+                ctx.bridge.call("sprite.info", instance="aaaaaa", timeout=3.0),
+                ctx.bridge.call("sprite.info", instance="bbbbbb", timeout=3.0),
+                return_exceptions=True,
+            )
+            assert isinstance(lost, BridgeError) and lost.code is ErrorCode.ASEPRITE_NOT_CONNECTED
+            assert kept["from"] == "b"
+            assert await wait_for(lambda: [i.id for i in ctx.bridge.instances] == ["bbbbbb"])
+        finally:
+            await a.stop()
+            await b.stop()
+
+    async def test_match_by_id_name_and_prefix(self, server):
+        _mcp, ctx = server
+        a = await self.attach(ctx, "a1b2c3", "knight")
+        b = await self.attach(ctx, "a1ffff")
+        try:
+            assert ctx.bridge.match("a1b2c3").id == "a1b2c3"
+            assert ctx.bridge.match("knight").id == "a1b2c3"
+            assert ctx.bridge.match("a1f").id == "a1ffff"
+            assert ctx.bridge.match("zzz") is None
+            with pytest.raises(BridgeError, match="more than one"):
+                ctx.bridge.match("a1")
+        finally:
+            await a.stop()
+            await b.stop()

@@ -1,6 +1,6 @@
 # Tool reference
 
-45 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
+46 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
 its place only if it helps the agent understand, modify, inspect or safely
 preserve the sprite. The sheet tools take it one past that range, because nothing
 else gets a game's sprite sheet in as frames or back out as a PNG.
@@ -23,6 +23,11 @@ Conventions:
   (rejected when ambiguous).
 - **Colours** are `#RGB`, `#RGBA`, `#RRGGBB` or `#RRGGBBAA`, case-insensitive.
 - Tools taking `layer` / `frame` default to the active layer and frame.
+- **Windows.** Every call goes to one Aseprite window: the session's choice from
+  `select_instance`, or the only one connected. Any call also accepts
+  `aseprite_instance` (an id, name or id prefix) to name the window for that
+  call alone, for clients that keep no MCP session. It is in no schema: the
+  server strips it before validation.
 
 ---
 
@@ -33,6 +38,18 @@ Whether the extension is attached, which document is open, and whether Aseprite
 has granted file access. Answers even when nothing is connected — it is the tool
 you use to diagnose. Calling it triggers the file-access probe, so the Security
 dialog may appear here.
+
+`instance` is the window this session's calls go to. With several windows
+connected, `instances` lists each with its `id`, `name`, active `document`,
+open `documents` and `selected` flag; until the session chooses, the reply
+carries the `INSTANCE_REQUIRED` error instead of a document.
+
+### `select_instance(instance)`
+Chooses the Aseprite window this session drives, by its id, its name
+(`ASEPRITE_MCP_INSTANCE`), a unique id prefix, or the file name of a document it
+has open. The choice lasts for the session, as its legends and preview history
+do, and survives the window reconnecting. Ambiguous matches are refused with the
+candidates listed. See SETUP.md, "Multiple sessions".
 
 ---
 

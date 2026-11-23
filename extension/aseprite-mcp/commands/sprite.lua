@@ -8,11 +8,19 @@ return function(deps)
   --- Cheap liveness/status probe used by get_connection_status.
   M["app.status"] = function()
     local sprite = app.sprite
+    -- File names of what is open, so an agent choosing between several
+    -- Aseprite windows can pick the one holding the sprite it wants.
+    local documents = {}
+    for i, open in ipairs(app.sprites) do
+      if i > 8 then break end
+      documents[#documents + 1] = app.fs.fileName(open.filename)
+    end
     return {
       documentOpen = sprite ~= nil,
       document = sprite and app.fs.fileName(sprite.filename) or nil,
       documentPath = sprite and sprite.filename or nil,
       openDocuments = #app.sprites,
+      documents = proto.array(documents),
     }
   end
 
