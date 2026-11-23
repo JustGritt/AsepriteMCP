@@ -291,6 +291,129 @@ return function(deps)
     return rec
   end
 
+  --- Pose one frame from validated recipes (part name -> recipe). Unlisted
+  -- parts keep their pose, or take the rest pose on a fresh frame. The caller
+  -- owns the transaction.
+  local function poseFrame(sprite, rig, frame, specs)
+    local posed, kept, missing = {}, {}, {}
+    local offsets = {}
+    for _, name in ipairs(dependencyOrder(rig)) do
+      local layer = imageLayer(sprite, name)
+      local leader = rig.follows[name]
+      local lead = leader and offsets[leader] or nil
+      local rec = specs[name]
+      local write = nil
+
+      if rec then
+        if lead then
+          rec.dx, rec.dy = rec.dx + lead[1], rec.dy + lead[2]
+          rec.lead = proto.array({ lead[1], lead[2] })
+        end
+        write = rec
+      else
+        local state, old = classify(sprite, layer, frame, rig.rest)
+        if state == "empty" or state == "copy" then
+          write = { src = rig.rest, dx = lead and lead[1] or 0, dy = lead and lead[2] or 0 }
+          if lead then write.lead = proto.array({ lead[1], lead[2] }) end
+        elseif state == "posed" and lead then
+          local oldLead = old.lead or { 0, 0 }
+          if oldLead[1] ~= lead[1] or oldLead[2] ~= lead[2] then
+            write = {}
+            for k, v in pairs(old) do write[k] = v end
+            write.hash = nil
+            write.dx = (old.dx or 0) - oldLead[1] + lead[1]
+            write.dy = (old.dy or 0) - oldLead[2] + lead[2]
+            write.lead = proto.array({ lead[1], lead[2] })
+          end
+          offsets[name] = { old.dx or 0, old.dy or 0 }
+        elseif state == "posed" then
+          offsets[name] = { old.dx or 0, old.dy or 0 }
+        else
+          kept[#kept + 1] = name
+          offsets[name] = old and { old.dx or 0, old.dy or 0 } or { 0, 0 }
+        end
+      end
+
+      if write then
+        local _, wasMissing = writePart(sprite, layer, frame, write)
+        if wasMissing then missing[#missing + 1] = name end
+        posed[#posed + 1] = name
+        offsets[name] = { write.dx or 0, write.dy or 0 }
+      end
+    end
+    local outline = nil
+    if rig.outline then outline = redrawOutline(sprite, rig, frame, false) end
+    return { posed = posed, kept = kept, missing = missing, outline = outline }
+  end
+
+  --- Rebuild posed cels on `frames` from their recipes, sources first, then
+  -- redraw the outlines. The caller owns the transaction.
+  local function refreshFrames(sprite, rig, frames, force)
+    local done, visiting = {}, {}
+    local r = { updated = 0, kept = {}, missing = {}, cycles = {}, outlines = 0, outlinesKept = {} }
+
+    local function refreshCel(layer, frame)
+      local key = layer.name .. "@" .. frame
+      if done[key] then return end
+      if visiting[key] then
+        r.cycles[#r.cycles + 1] = key
+        return
+      end
+      local cel = layer:cel(frame)
+      local rec = cel and cel.properties(EXT).pose or nil
+      if not rec then
+        done[key] = true
+        return
+      end
+      local before = store.hashCel(sprite, cel)
+      if rec.hash ~= before and rec.hide then
+        -- Drawn over a hidden part: a new drawing and a source, never derived,
+        -- so there is nothing to rebuild and nothing to warn about.
+        done[key] = true
+        return
+      end
+      if rec.hash ~= before and not force then
+        r.kept[#r.kept + 1] = key
+        done[key] = true
+        return
+      end
+      if not rec.hide then
+        if rec.src < 1 or rec.src > #sprite.frames then
+          r.missing[#r.missing + 1] = key
+          done[key] = true
+          return
+        end
+        visiting[key] = true
+        local source = rec.from and imageLayer(sprite, rec.from) or layer
+        refreshCel(source, rec.src)
+        visiting[key] = nil
+      end
+      local copy = {}
+      for k, v in pairs(rec) do copy[k] = v end
+      copy.hash = nil
+      local written, wasMissing = writePart(sprite, layer, frame, copy)
+      if wasMissing then r.missing[#r.missing + 1] = key end
+      if store.hashCel(sprite, written) ~= before then r.updated = r.updated + 1 end
+      done[key] = true
+    end
+
+    for _, frame in ipairs(frames) do
+      for _, name in ipairs(dependencyOrder(rig)) do
+        refreshCel(imageLayer(sprite, name), frame)
+      end
+    end
+    if rig.outline then
+      for _, frame in ipairs(frames) do
+        if redrawOutline(sprite, rig, frame, force) == "kept" then
+          r.outlinesKept[#r.outlinesKept + 1] = frame
+        else
+          r.outlines = r.outlines + 1
+        end
+      end
+    end
+    return r
+  end
+
   -- ----------------------------------------------------------------- commands
 
   M["rig.define"] = function(params)
@@ -455,56 +578,12 @@ return function(deps)
       end
     end
 
-    local posed, kept, missing = {}, {}, {}
-    local offsets = {}
-    local outlineResult
+    local result
     app.transaction("mcp: pose frame", function()
-      for _, name in ipairs(dependencyOrder(rig)) do
-        local layer = imageLayer(sprite, name)
-        local leader = rig.follows[name]
-        local lead = leader and offsets[leader] or nil
-        local rec = specs[name]
-        local write = nil
-
-        if rec then
-          if lead then
-            rec.dx, rec.dy = rec.dx + lead[1], rec.dy + lead[2]
-            rec.lead = proto.array({ lead[1], lead[2] })
-          end
-          write = rec
-        else
-          local state, old = classify(sprite, layer, frame, rig.rest)
-          if state == "empty" or state == "copy" then
-            write = { src = rig.rest, dx = lead and lead[1] or 0, dy = lead and lead[2] or 0 }
-            if lead then write.lead = proto.array({ lead[1], lead[2] }) end
-          elseif state == "posed" and lead then
-            local oldLead = old.lead or { 0, 0 }
-            if oldLead[1] ~= lead[1] or oldLead[2] ~= lead[2] then
-              write = {}
-              for k, v in pairs(old) do write[k] = v end
-              write.hash = nil
-              write.dx = (old.dx or 0) - oldLead[1] + lead[1]
-              write.dy = (old.dy or 0) - oldLead[2] + lead[2]
-              write.lead = proto.array({ lead[1], lead[2] })
-            end
-            offsets[name] = { old.dx or 0, old.dy or 0 }
-          elseif state == "posed" then
-            offsets[name] = { old.dx or 0, old.dy or 0 }
-          else
-            kept[#kept + 1] = name
-            offsets[name] = old and { old.dx or 0, old.dy or 0 } or { 0, 0 }
-          end
-        end
-
-        if write then
-          local _, wasMissing = writePart(sprite, layer, frame, write)
-          if wasMissing then missing[#missing + 1] = name end
-          posed[#posed + 1] = name
-          offsets[name] = { write.dx or 0, write.dy or 0 }
-        end
-      end
-      if rig.outline then outlineResult = redrawOutline(sprite, rig, frame, false) end
+      result = poseFrame(sprite, rig, frame, specs)
     end)
+    local posed, kept, missing = result.posed, result.kept, result.missing
+    local outlineResult = result.outline
 
     local box, detached = inspectFrame(sprite, rig, frame)
     return {
@@ -533,72 +612,12 @@ return function(deps)
       for i = 1, #sprite.frames do frames[#frames + 1] = i end
     end
 
-    local done, visiting = {}, {}
-    local updated, kept, missing, cycles = 0, {}, {}, {}
-    local outlines, outlinesKept = 0, {}
-
-    local function refreshCel(layer, frame)
-      local key = layer.name .. "@" .. frame
-      if done[key] then return end
-      if visiting[key] then
-        cycles[#cycles + 1] = key
-        return
-      end
-      local cel = layer:cel(frame)
-      local rec = cel and cel.properties(EXT).pose or nil
-      if not rec then
-        done[key] = true
-        return
-      end
-      local before = store.hashCel(sprite, cel)
-      if rec.hash ~= before and rec.hide then
-        -- Drawn over a hidden part: a new drawing and a source, never derived,
-        -- so there is nothing to rebuild and nothing to warn about.
-        done[key] = true
-        return
-      end
-      if rec.hash ~= before and not force then
-        kept[#kept + 1] = key
-        done[key] = true
-        return
-      end
-      if not rec.hide then
-        if rec.src < 1 or rec.src > #sprite.frames then
-          missing[#missing + 1] = key
-          done[key] = true
-          return
-        end
-        visiting[key] = true
-        local source = rec.from and imageLayer(sprite, rec.from) or layer
-        refreshCel(source, rec.src)
-        visiting[key] = nil
-      end
-      local copy = {}
-      for k, v in pairs(rec) do copy[k] = v end
-      copy.hash = nil
-      local written, wasMissing = writePart(sprite, layer, frame, copy)
-      if wasMissing then missing[#missing + 1] = key end
-      if store.hashCel(sprite, written) ~= before then updated = updated + 1 end
-      done[key] = true
-    end
-
+    local r
     app.transaction("mcp: refresh rig", function()
-      for _, frame in ipairs(frames) do
-        for _, name in ipairs(dependencyOrder(rig)) do
-          refreshCel(imageLayer(sprite, name), frame)
-        end
-      end
-      if rig.outline then
-        for _, frame in ipairs(frames) do
-          local result = redrawOutline(sprite, rig, frame, force)
-          if result == "kept" then
-            outlinesKept[#outlinesKept + 1] = frame
-          else
-            outlines = outlines + 1
-          end
-        end
-      end
+      r = refreshFrames(sprite, rig, frames, force)
     end)
+    local updated, kept, missing, cycles = r.updated, r.kept, r.missing, r.cycles
+    local outlines, outlinesKept = r.outlines, r.outlinesKept
 
     return {
       frames = #frames,
@@ -608,6 +627,423 @@ return function(deps)
       cycles = #cycles > 0 and proto.array(cycles) or nil,
       outlines = rig.outline and outlines or nil,
       outlinesKept = #outlinesKept > 0 and proto.array(outlinesKept) or nil,
+    }
+  end
+
+  -- ------------------------------------------------------------- templates
+  --
+  -- A template is one rigged sprite's animations as data, so a character that
+  -- shares the body (the same part names, usually the same legs) gets them
+  -- without being animated again. See docs/ANIMATION.md, "Templates".
+
+  local TEMPLATE_FORMAT, TEMPLATE_VERSION = "aseprite-mcp-poses", 1
+  local DRAWING_SYMBOLS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+  local TO_ANIDIR = {
+    forward = AniDir.FORWARD,
+    reverse = AniDir.REVERSE,
+    pingpong = AniDir.PING_PONG,
+    pingpong_reverse = AniDir.PING_PONG_REVERSE,
+  }
+
+  --- A cel's opaque pixels in the draw_rows format, or nil when it has none.
+  local function celToRows(sprite, cel)
+    if not cel then return nil end
+    local px, py = cel.position.x, cel.position.y
+    local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
+    for it in cel.image:pixels() do
+      if store.isOpaque(sprite, it()) then
+        if it.x < minX then minX = it.x end
+        if it.y < minY then minY = it.y end
+        if it.x > maxX then maxX = it.x end
+        if it.y > maxY then maxY = it.y end
+      end
+    end
+    if maxX < minX then return nil end
+    local symbolOf, legend, used = {}, {}, 0
+    local rows = {}
+    for y = minY, maxY do
+      local chars = {}
+      for x = minX, maxX do
+        local value = cel.image:getPixel(x, y)
+        if store.isOpaque(sprite, value) then
+          local hex = color.pixelToHex(sprite, value)
+          local symbol = symbolOf[hex]
+          if not symbol then
+            used = used + 1
+            if used > #DRAWING_SYMBOLS then
+              proto.fail(proto.ERROR.INVALID_PARAMS,
+                "A drawing has more colors than a template can store (62).")
+            end
+            symbol = DRAWING_SYMBOLS:sub(used, used)
+            symbolOf[hex], legend[symbol] = symbol, hex
+          end
+          chars[#chars + 1] = symbol
+        else
+          chars[#chars + 1] = "."
+        end
+      end
+      rows[#rows + 1] = table.concat(chars)
+    end
+    return { x = px + minX, y = py + minY, rows = proto.array(rows), legend = legend }
+  end
+
+  --- Write a stored drawing as a new, unrecorded (hand-drawn) cel.
+  local function rowsToCel(sprite, layer, frame, drawing)
+    local rows = drawing.rows
+    local width = 0
+    for i = 1, #rows do if #rows[i] > width then width = #rows[i] end end
+    local image = Image(math.max(width, 1), math.max(#rows, 1), sprite.colorMode)
+    image:clear(color.transparentValue(sprite))
+    local values = {}
+    for symbol, hex in pairs(drawing.legend) do
+      values[symbol] = color.toPixelValue(sprite, { color = hex })
+    end
+    for j = 1, #rows do
+      local row = rows[j]
+      for i = 1, #row do
+        local value = values[row:sub(i, i)]
+        if value ~= nil then image:drawPixel(i - 1, j - 1, value) end
+      end
+    end
+    return sprite:newCel(layer, frame, image, Point(drawing.x, drawing.y))
+  end
+
+  M["rig.exportPoses"] = function(params)
+    local sprite = doc.activeSprite()
+    local rig = requireRig(sprite)
+
+    local chosen = {}
+    if params.tags ~= nil then
+      for i = 1, #params.tags do
+        local found = nil
+        for _, tag in ipairs(sprite.tags) do
+          if tag.name == params.tags[i] then found = tag break end
+        end
+        if not found then
+          local names = {}
+          for _, tag in ipairs(sprite.tags) do names[#names + 1] = tag.name end
+          proto.failf(proto.ERROR.INVALID_PARAMS, "No tag named %q. Tags: %s",
+            tostring(params.tags[i]), #names > 0 and table.concat(names, ", ") or "none")
+        end
+        chosen[#chosen + 1] = found
+      end
+    else
+      for _, tag in ipairs(sprite.tags) do chosen[#chosen + 1] = tag end
+    end
+    if #chosen == 0 then
+      proto.fail(proto.ERROR.INVALID_PARAMS,
+        "This sprite has no tags. Tag its animations first: a template is made of tags.")
+    end
+
+    local inSet, frames = {}, {}
+    for _, tag in ipairs(chosen) do
+      for f = tag.fromFrame.frameNumber, tag.toFrame.frameNumber do
+        if not inSet[f] then
+          inSet[f] = true
+          frames[#frames + 1] = f
+        end
+      end
+    end
+    table.sort(frames)
+
+    local out, drawn = {}, 0
+    for _, f in ipairs(frames) do
+      local entry = { frame = f, ms = doc.msFromSeconds(sprite.frames[f].duration) }
+      if f == rig.rest then
+        entry.rest = true
+      else
+        local parts = {}
+        for _, name in ipairs(rig.parts) do
+          local layer = imageLayer(sprite, name)
+          local state, rec = classify(sprite, layer, f, rig.rest)
+          local pose
+          if state == "empty" then
+            pose = { hide = true }
+          elseif state == "copy" then
+            pose = { dx = 0, dy = 0 }
+          elseif state == "posed" and rec.hide then
+            pose = { hide = true }
+          elseif state == "posed" then
+            pose = { dx = rec.dx or 0, dy = rec.dy or 0, layer = rec.from }
+            if rec.src ~= rig.rest then
+              if not inSet[rec.src] then
+                proto.failf(proto.ERROR.INVALID_PARAMS,
+                  "%s on frame %d takes its drawing from frame %d, which is in none of the "
+                    .. "tags being exported. Export that frame's tag too.", name, f, rec.src)
+              end
+              pose.frame = rec.src
+            end
+            if rec.recolor then
+              local map = {}
+              for from, to in pairs(rec.recolor) do map[from] = to end
+              pose.recolor = map
+            end
+          else
+            local drawing = celToRows(sprite, layer:cel(f))
+            if drawing then
+              pose = { drawn = drawing }
+              drawn = drawn + 1
+            else
+              pose = { hide = true }
+            end
+          end
+          parts[name] = pose
+        end
+        entry.parts = parts
+      end
+      out[#out + 1] = entry
+    end
+
+    local tags = {}
+    for _, tag in ipairs(chosen) do
+      tags[#tags + 1] = {
+        name = tag.name,
+        from = tag.fromFrame.frameNumber,
+        to = tag.toFrame.frameNumber,
+        direction = doc.directionName(tag.aniDir),
+        repeats = tag.repeats ~= 0 and tag.repeats or nil,
+      }
+    end
+
+    -- What each part's rest drawing looked like, so an import can tell a part
+    -- it shares (the same legs) from one it does not (another role's torso).
+    local restHashes = {}
+    for _, name in ipairs(rig.parts) do
+      restHashes[name] = store.hashCel(sprite, imageLayer(sprite, name):cel(rig.rest))
+    end
+
+    return {
+      template = {
+        format = TEMPLATE_FORMAT,
+        version = TEMPLATE_VERSION,
+        canvas = proto.array({ sprite.width, sprite.height }),
+        rest = rig.rest,
+        parts = proto.array(rig.parts),
+        follows = next(rig.follows) and rig.follows or nil,
+        restHashes = restHashes,
+        frames = proto.array(out),
+        tags = proto.array(tags),
+      },
+      frames = #out,
+      tags = proto.array((function()
+        local names = {}
+        for _, tag in ipairs(chosen) do names[#names + 1] = tag.name end
+        return names
+      end)()),
+      drawn = drawn,
+    }
+  end
+
+  M["rig.importPoses"] = function(params)
+    local sprite = doc.activeSprite()
+    local rig = requireRig(sprite)
+    local t = params.template
+    if not proto.isStructured(t) or t.format ~= TEMPLATE_FORMAT then
+      proto.fail(proto.ERROR.INVALID_PARAMS, "That file is not a pose template.")
+    end
+    if t.version ~= TEMPLATE_VERSION then
+      proto.failf(proto.ERROR.INVALID_PARAMS,
+        "Template version %s is not supported; this server reads version %d.",
+        tostring(t.version), TEMPLATE_VERSION)
+    end
+    local mode = params.drawings or "auto"
+    if mode ~= "auto" and mode ~= "copy" and mode ~= "skip" then
+      proto.fail(proto.ERROR.INVALID_PARAMS, "drawings must be auto, copy or skip.")
+    end
+
+    -- Which tags, in template order.
+    local wanted = {}
+    if params.tags ~= nil then
+      local want = {}
+      for i = 1, #params.tags do want[params.tags[i]] = true end
+      for i = 1, #t.tags do
+        if want[t.tags[i].name] then
+          wanted[#wanted + 1] = t.tags[i]
+          want[t.tags[i].name] = nil
+        end
+      end
+      local unknown = next(want)
+      if unknown then
+        local names = {}
+        for i = 1, #t.tags do names[#names + 1] = t.tags[i].name end
+        proto.failf(proto.ERROR.INVALID_PARAMS, "The template has no tag %q. Its tags: %s",
+          tostring(unknown), table.concat(names, ", "))
+      end
+    else
+      for i = 1, #t.tags do wanted[#wanted + 1] = t.tags[i] end
+    end
+    for _, tag in ipairs(wanted) do
+      for _, existing in ipairs(sprite.tags) do
+        if existing.name == tag.name then
+          proto.failf(proto.ERROR.INVALID_PARAMS,
+            "This sprite already has a tag %q. Delete it (and its frames) or import other tags.",
+            tag.name)
+        end
+      end
+    end
+
+    local entries, needed = {}, {}
+    for i = 1, #t.frames do entries[t.frames[i].frame] = t.frames[i] end
+    for _, tag in ipairs(wanted) do
+      for f = tag.from, tag.to do
+        if not entries[f] then
+          proto.failf(proto.ERROR.INVALID_PARAMS, "The template is missing frame %d of %q.", f, tag.name)
+        end
+        needed[f] = true
+      end
+    end
+
+    -- Parts on each side, and the references the poses make.
+    local templateParts, ignored, own = {}, {}, {}
+    for i = 1, #t.parts do
+      templateParts[t.parts[i]] = true
+      if not isPart(rig, t.parts[i]) then ignored[#ignored + 1] = t.parts[i] end
+    end
+    for _, name in ipairs(rig.parts) do
+      if not templateParts[name] then own[#own + 1] = name end
+    end
+    for f in pairs(needed) do
+      local parts = entries[f].parts
+      if parts then
+        for name, pose in pairs(parts) do
+          if isPart(rig, name) and not pose.drawn then
+            if pose.frame ~= nil and not needed[pose.frame] then
+              proto.failf(proto.ERROR.INVALID_PARAMS,
+                "%s on template frame %d takes its drawing from frame %d, which is in none "
+                  .. "of the tags being imported. Import that tag too.", name, f, pose.frame)
+            end
+            if pose.layer ~= nil then imageLayer(sprite, pose.layer) end
+          end
+        end
+      end
+    end
+
+    -- Copy a hand-drawn drawing only onto the same part: same rest drawing.
+    local copyPart = {}
+    for _, name in ipairs(rig.parts) do
+      if mode == "copy" then
+        copyPart[name] = true
+      elseif mode == "auto" then
+        local hash = store.hashCel(sprite, imageLayer(sprite, name):cel(rig.rest))
+        copyPart[name] = t.restHashes ~= nil and t.restHashes[name] == hash
+      end
+    end
+
+    local restIsFree = rig.rest == #sprite.frames
+    for _, tag in ipairs(sprite.tags) do
+      if tag.fromFrame.frameNumber <= rig.rest and rig.rest <= tag.toFrame.frameNumber then
+        restIsFree = false
+      end
+    end
+
+    local map, built, copied, toDraw, madeTags = {}, {}, {}, {}, {}
+    app.transaction("mcp: import poses", function()
+      -- Frames: appended in template order. The template's rest frame at the
+      -- start of a tag reuses this sprite's rest frame when that is the last,
+      -- untagged frame, so a fresh sprite ends up laid out like the template.
+      for _, tag in ipairs(wanted) do
+        for f = tag.from, tag.to do
+          if not map[f] then
+            if f == t.rest and f == tag.from and restIsFree then
+              map[f] = rig.rest
+              restIsFree = false
+            else
+              local position = #sprite.frames + 1
+              sprite:newEmptyFrame(position)
+              map[f] = position
+              built[#built + 1] = position
+            end
+            sprite.frames[map[f]].duration = doc.secondsFromMs(entries[f].ms or 100)
+          end
+        end
+        local from, to = map[tag.from], map[tag.to]
+        for f = tag.from, tag.to do
+          if map[f] ~= from + (f - tag.from) then
+            proto.failf(proto.ERROR.INVALID_PARAMS,
+              "Tag %q would not be contiguous here; import it on its own.", tag.name)
+          end
+        end
+        madeTags[#madeTags + 1] = { tag = tag, from = from, to = to }
+      end
+
+      -- Hand-drawn drawings first: other frames may take them as a source.
+      for f in pairs(needed) do
+        local target = map[f]
+        local parts = entries[f].parts
+        if parts and target ~= rig.rest then
+          for name, pose in pairs(parts) do
+            if pose.drawn and isPart(rig, name) then
+              local layer = imageLayer(sprite, name)
+              if copyPart[name] then
+                rowsToCel(sprite, layer, target, pose.drawn)
+                copied[#copied + 1] = name .. "@" .. target
+              else
+                -- Hidden until drawn: drawing over it makes it a source.
+                writePart(sprite, layer, target, { src = rig.rest, dx = 0, dy = 0, hide = true })
+                toDraw[#toDraw + 1] = name .. "@" .. target
+              end
+            end
+          end
+        end
+      end
+
+      -- Poses. Offsets are the template's on-canvas ones, made relative to
+      -- this rig's leaders, so a template survives a different follows.
+      for f in pairs(needed) do
+        local target = map[f]
+        if target ~= rig.rest then
+          local parts = entries[f].parts or {}
+          local specs = {}
+          for _, name in ipairs(rig.parts) do
+            local pose = parts[name]
+            if pose == nil or not pose.drawn then
+              pose = pose or { dx = 0, dy = 0 }
+              local lx, ly = 0, 0
+              local leader = rig.follows[name]
+              local lp = leader and parts[leader] or nil
+              if lp and not lp.drawn and not lp.hide then lx, ly = lp.dx or 0, lp.dy or 0 end
+              local spec = {
+                dx = (pose.dx or 0) - lx,
+                dy = (pose.dy or 0) - ly,
+                frame = pose.frame ~= nil and map[pose.frame] or nil,
+                layer = pose.layer,
+                recolor = pose.recolor,
+                hide = pose.hide,
+              }
+              specs[name] = recipeFrom(sprite, rig, name, target, spec)
+            end
+          end
+          poseFrame(sprite, rig, target, specs)
+        end
+      end
+
+      -- Poses built before their sources were: rebuild them in source order.
+      local frames = {}
+      for _, target in ipairs(built) do frames[#frames + 1] = target end
+      refreshFrames(sprite, rig, frames, false)
+
+      for _, made in ipairs(madeTags) do
+        local tag = sprite:newTag(made.from, made.to)
+        tag.name = made.tag.name
+        tag.aniDir = TO_ANIDIR[made.tag.direction or "forward"] or AniDir.FORWARD
+        if made.tag.repeats ~= nil then pcall(function() tag.repeats = made.tag.repeats end) end
+      end
+    end)
+
+    local tags = {}
+    for _, made in ipairs(madeTags) do
+      tags[#tags + 1] = { name = made.tag.name, from = made.from, to = made.to }
+    end
+    table.sort(built)
+    table.sort(copied)
+    table.sort(toDraw)
+    return {
+      frames = proto.array(built),
+      tags = proto.array(tags),
+      copied = #copied > 0 and proto.array(copied) or nil,
+      toDraw = #toDraw > 0 and proto.array(toDraw) or nil,
+      ignoredParts = #ignored > 0 and proto.array(ignored) or nil,
+      restPoseParts = #own > 0 and proto.array(own) or nil,
     }
   end
 

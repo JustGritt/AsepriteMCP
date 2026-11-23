@@ -1430,6 +1430,62 @@ class TestInstances:
                 await fake.stop()
 
 
+class TestPoseTemplates:
+    async def test_export_writes_the_template_and_replies_with_a_summary(
+        self, server, aseprite, sandbox
+    ):
+        mcp, _ = server
+        template = {"format": "aseprite-mcp-poses", "version": 1, "frames": [{"frame": 1}]}
+        aseprite.reply("rig.exportPoses", {"template": template, "frames": 1, "tags": ["walk"],
+                                           "drawn": 0})
+        payload = json_of(await ok(mcp, "export_poses", path="templates/biped.json",
+                                   tags=["walk"]))
+        written = json.loads((sandbox / "templates" / "biped.json").read_text())
+        assert written == template
+        assert "template" not in payload, "the agent gets a summary, not the whole file"
+        assert payload["tags"] == ["walk"] and payload["frames"] == 1
+        assert aseprite.last("rig.exportPoses")["params"]["tags"] == ["walk"]
+        again = json_of(await ok(mcp, "export_poses", path="templates/biped.json"))
+        assert again["replaced"] is True
+
+    async def test_export_will_not_overwrite_another_file(self, server, aseprite, sandbox):
+        mcp, _ = server
+        (sandbox / "notes.json").write_text('{"mine": true}')
+        aseprite.reply("rig.exportPoses", {"template": {"format": "aseprite-mcp-poses"}})
+        assert "not a pose template" in await err(mcp, "export_poses", path="notes.json")
+        assert json.loads((sandbox / "notes.json").read_text()) == {"mine": True}
+        assert not aseprite.requests
+
+    async def test_export_stays_in_the_sandbox_and_writes_json(self, server, aseprite, tmp_path):
+        mcp, _ = server
+        assert "PATH_NOT_ALLOWED" in await err(mcp, "export_poses", path=str(tmp_path / "x.json"))
+        assert "PATH_NOT_ALLOWED" in await err(mcp, "export_poses", path="poses.txt")
+        assert "tags" in await err(mcp, "export_poses", path="p.json", tags=[])
+
+    async def test_import_sends_the_template_and_options(self, server, aseprite, sandbox):
+        mcp, _ = server
+        (sandbox / "biped.json").write_text(json.dumps(TEMPLATE_FIXTURE))
+        await ok(mcp, "import_poses", path="biped.json", tags=["idle"], drawings="skip")
+        params = aseprite.last("rig.importPoses")["params"]
+        assert params == {"template": TEMPLATE_FIXTURE, "drawings": "skip", "tags": ["idle"]}
+        await ok(mcp, "import_poses", path="biped.json")
+        assert aseprite.last("rig.importPoses")["params"]["drawings"] == "auto"
+
+    async def test_import_refuses_what_is_not_a_template(self, server, aseprite, sandbox):
+        mcp, _ = server
+        (sandbox / "broken.json").write_text("{not json")
+        (sandbox / "other.json").write_text('{"format": "something-else"}')
+        assert "as JSON" in await err(mcp, "import_poses", path="broken.json")
+        assert "not a pose template" in await err(mcp, "import_poses", path="other.json")
+        missing = await err(mcp, "import_poses", path="missing.json")
+        assert "missing.json" in missing
+        assert "drawings" in await err(mcp, "import_poses", path="other.json", drawings="always")
+        assert not aseprite.requests
+
+
+TEMPLATE_FIXTURE = {"format": "aseprite-mcp-poses", "version": 1, "frames": [], "tags": []}
+
+
 MINIMAL_ARGUMENTS = {
     "get_connection_status": {},
     "get_sprite_info": {},
@@ -1477,6 +1533,8 @@ MINIMAL_ARGUMENTS = {
     "pose_frame": {"frame": 2},
     "refresh_rig": {},
     "select_instance": {"instance": "aseprite"},
+    "export_poses": {"path": "poses.json"},
+    "import_poses": {"path": "fixture.json"},
 }
 
 
@@ -1496,6 +1554,8 @@ async def test_tool_smoke(server, aseprite, sandbox, name):
     mcp, _ = server
     (sandbox / "fixture.aseprite").write_bytes(b"")
     (sandbox / "fixture.png").write_bytes(b"")
+    (sandbox / "fixture.json").write_text(json.dumps(TEMPLATE_FIXTURE))
+    aseprite.reply("rig.exportPoses", {"template": TEMPLATE_FIXTURE, "frames": 0})
     await ok(mcp, name, **MINIMAL_ARGUMENTS[name])
 
 
@@ -1508,6 +1568,7 @@ async def test_tools_report_disconnection(server, sandbox, name):
     mcp, _ = server
     (sandbox / "fixture.aseprite").write_bytes(b"")
     (sandbox / "fixture.png").write_bytes(b"")
+    (sandbox / "fixture.json").write_text(json.dumps(TEMPLATE_FIXTURE))
     if name == "get_connection_status":
         result = await mcp.call_tool(name, MINIMAL_ARGUMENTS[name])
         assert not result.is_error
