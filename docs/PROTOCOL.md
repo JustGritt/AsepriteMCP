@@ -21,13 +21,24 @@ within 10 seconds, is closed.
   "apiVersion": 41,
   "capabilities": ["layer.uuid"],
   "instance": "a1b2c3",
-  "instanceName": "knight"
+  "instanceName": "knight",
+  "files": {"main.lua": 2731407353, "commands/rig.lua": 1234567890, "...": 0}
 }
 ```
 
 `capabilities` lets the server degrade gracefully on older 1.3.x builds rather
 than erroring. It is derived from `app.apiVersion`, never by poking at a
 document — see the note on callback safety in ARCHITECTURE.md.
+
+`files` is the extension's own fingerprint, taken once at load: every `.lua`
+file and `package.json` under its folder (not the `__*` files Aseprite writes),
+by relative path, with an FNV-1a hash of its bytes that skips carriage returns.
+The server hashes its own copy of the extension the same way and refuses every
+command except `app.status` and `fs.probe` with `EXTENSION_OUTDATED` while any
+file differs, so an Aseprite still running an older extension is named as such
+(#16). An extension that cannot read its files sends `filesError` with the
+reason instead, and is not blocked. A hello with neither comes from an
+extension older than the check.
 
 `instance` names this Aseprite process: six hex characters chosen when the
 extension loads, kept across reconnects, and different in a second copy of

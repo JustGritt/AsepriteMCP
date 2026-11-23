@@ -215,6 +215,7 @@ All optional. The defaults work.
 | `ASEPRITE_MCP_ALLOWED_DIRS` | `<repo>/sprites` | Directories the file tools (`open_sprite`, `save_sprite`, `import_spritesheet`, `export_spritesheet`) may touch, `;`-separated. Everything else is refused, including saving over a document you opened by hand from somewhere else. |
 | `ASEPRITE_MCP_PORT` | `32145` | Bridge port. Set it for **both** the server and Aseprite if you change it. On the Aseprite side a port typed into the connect dialog outranks this. |
 | `ASEPRITE_MCP_HOST` | `127.0.0.1` | Loopback only unless `ASEPRITE_MCP_ALLOW_NON_LOOPBACK=1`. Outranked by the connect dialog, same as the port. |
+| `ASEPRITE_MCP_EXTENSION_DIR` | this checkout's `extension/aseprite-mcp` | Server only: the copy of the extension a running Aseprite is checked against. `off` disables the check, which is also off when no copy is found. |
 | `ASEPRITE_MCP_INSTANCE` | unset | Aseprite only: a name for this window, shown in the connect dialog and accepted by `select_instance`. |
 | `ASEPRITE_MCP_TOKEN` | unset | Opt-in shared secret; set the same value in both environments. |
 | `ASEPRITE_MCP_TIMEOUT` | `5` | Seconds to wait for a normal command. |
@@ -264,6 +265,17 @@ answer looks like:
 ```
 
 ## Troubleshooting
+
+**`EXTENSION_OUTDATED`**
+Aseprite is running a different copy of the extension than the server's
+`extension/aseprite-mcp`, so its replies may not mean what the tools expect.
+The error and `get_connection_status` (`staleFiles`) name the files that
+differ. Reinstall the extension (section 2; an install made with `--link` /
+`-Link` needs none), then quit Aseprite completely and reopen it: on macOS,
+closing the window leaves Aseprite running, so use Cmd+Q. Editing the
+extension's Lua in the checkout while Aseprite runs has the same effect until
+the restart. To turn the check off, set `ASEPRITE_MCP_EXTENSION_DIR=off` for
+the server.
 
 **`INSTANCE_REQUIRED`**
 More than one Aseprite window is connected and this session has not chosen one.

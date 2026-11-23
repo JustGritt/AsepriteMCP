@@ -83,6 +83,11 @@ class Config:
     token: str = ""
     log_level: str = "INFO"
 
+    # The server's own copy of the Aseprite extension, which the running one is
+    # checked against (#16). None turns the check off; from_env finds the copy
+    # in this checkout, and a server installed without one has nothing to check.
+    extension_dir: Path | None = None
+
     @classmethod
     def from_env(cls) -> "Config":
         host = os.environ.get("ASEPRITE_MCP_HOST", "127.0.0.1").strip() or "127.0.0.1"
@@ -106,6 +111,15 @@ class Config:
         token = os.environ.get("ASEPRITE_MCP_TOKEN", "").strip()
         usage_log = os.environ.get("ASEPRITE_MCP_USAGE_LOG", "").strip()
 
+        raw_extension = os.environ.get("ASEPRITE_MCP_EXTENSION_DIR", "").strip()
+        if raw_extension.lower() == "off":
+            extension_dir = None
+        elif raw_extension:
+            extension_dir = Path(os.path.expanduser(raw_extension)).resolve()
+        else:
+            candidate = _repo_root() / "extension" / "aseprite-mcp"
+            extension_dir = candidate if candidate.is_dir() else None
+
         return cls(
             host=host,
             port=_env_int("ASEPRITE_MCP_PORT", DEFAULT_PORT),
@@ -120,4 +134,5 @@ class Config:
             require_token=bool(token) or os.environ.get("ASEPRITE_MCP_REQUIRE_TOKEN") == "1",
             token=token,
             log_level=os.environ.get("ASEPRITE_MCP_LOG_LEVEL", "INFO").upper(),
+            extension_dir=extension_dir,
         )

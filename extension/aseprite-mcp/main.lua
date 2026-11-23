@@ -36,6 +36,14 @@ trace.writef("extension loaded (apiVersion=%s, commands=%d, canWriteFiles=%s)",
 
 queue.setSender(ws.send)
 
+-- Fingerprinted at load, after primeAccess has settled file access, and sent
+-- in every hello so the server can tell an outdated extension (#16).
+if canWriteFiles then
+  ws.setFingerprint(core.fsio.fingerprint(SCRIPT_DIR))
+else
+  ws.setFingerprint(nil, "no file access")
+end
+
 --- The pump owns the only Timer in the extension, and that Timer drives both the
 --- socket poll and the dialog's refresh. So it runs while the bridge is dialling
 --- *or* while the dialog is open, and nothing else may start or stop it.

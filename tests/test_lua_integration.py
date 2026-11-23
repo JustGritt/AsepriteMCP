@@ -64,3 +64,30 @@ def test_lua_handler_suite(aseprite_exe: str):
     assert "LUA_TESTS_PASSED" in output, (
         "Lua handler tests failed or did not run to completion.\n" + output
     )
+
+
+def test_lua_and_python_fingerprint_the_extension_alike(aseprite_exe: str, tmp_path: Path):
+    """The extension's own fingerprint (sent in its hello) must equal the server's
+    of the same files, or every window would look outdated (#16)."""
+    import json
+
+    from aseprite_mcp.extension_check import ExtensionCopy
+
+    extension = REPO_ROOT / "extension" / "aseprite-mcp"
+    out = tmp_path / "fingerprint.json"
+    script = tmp_path / "fingerprint.lua"
+    script.write_text(
+        "local fsio = dofile(app.params.ext .. '/fsio.lua')\n"
+        "local files, why = fsio.fingerprint(app.params.ext)\n"
+        "local f = io.open(app.params.out, 'w')\n"
+        "f:write(json.encode(files or { error = why }))\n"
+        "f:close()\n"
+    )
+    subprocess.run(
+        [aseprite_exe, "-b", "--script-param", f"ext={extension}",
+         "--script-param", f"out={out}", "--script", str(script)],
+        capture_output=True, text=True, timeout=60, check=True,
+    )
+    from_lua = json.loads(out.read_text())
+    assert "error" not in from_lua, from_lua
+    assert from_lua == ExtensionCopy(extension).fingerprint()

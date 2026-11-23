@@ -79,6 +79,50 @@ function M.primeAccess()
   return M.canWrite()
 end
 
+--- FNV-1a over a file's bytes, skipping carriage returns, so a checkout with
+-- Windows line endings fingerprints like one without. The server computes the
+-- same function over its own copy (src/aseprite_mcp/extension_check.py).
+local function contentHash(text)
+  local h = 2166136261
+  for i = 1, #text do
+    local b = text:byte(i)
+    if b ~= 13 then h = ((h ~ b) * 16777619) & 0xffffffff end
+  end
+  return h
+end
+M.contentHash = contentHash
+
+--- What this extension is made of: relative path -> content hash, for every
+-- .lua file and package.json under dir. Files Aseprite writes itself (__*) are
+-- left out. Returns nil plus a reason when the files cannot be read.
+--
+-- Called once, at load, for the same reason primeAccess is: file access may
+-- raise the Security prompt, which must not happen inside the command pump.
+-- The server compares this with its own copy, so an Aseprite still running an
+-- older extension is named as such instead of failing obscurely (#16).
+function M.fingerprint(dir)
+  local files, count = {}, 0
+  local function walk(path, prefix)
+    for _, name in ipairs(app.fs.listFiles(path)) do
+      local full = app.fs.joinPath(path, name)
+      if app.fs.isDirectory(full) then
+        walk(full, prefix .. name .. "/")
+      elseif name:sub(1, 2) ~= "__" and (name:match("%.lua$") or name == "package.json") then
+        local file, err = io.open(full, "rb")
+        if not file then error(tostring(err), 0) end
+        local text = file:read("a")
+        file:close()
+        files[prefix .. name] = contentHash(text)
+        count = count + 1
+      end
+    end
+  end
+  local ok, err = pcall(walk, dir, "")
+  if not ok then return nil, tostring(err) end
+  if count == 0 then return nil, "no extension files could be listed" end
+  return files
+end
+
 --- Save an Image as a PNG.
 function M.saveImage(image, path)
   image:saveAs(path)

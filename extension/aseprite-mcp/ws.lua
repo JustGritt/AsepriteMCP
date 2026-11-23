@@ -48,6 +48,9 @@ return function(deps)
   local target = nil
   local enabled = true
   local instanceId = newInstanceId()
+  -- This extension's files, path -> content hash, or why they could not be
+  -- read. Set once at load by main.lua; see fsio.fingerprint.
+  local files, filesError = nil, nil
   local instanceName = os.getenv and os.getenv("ASEPRITE_MCP_INSTANCE") or nil
   if instanceName == "" then instanceName = nil end
 
@@ -184,6 +187,8 @@ return function(deps)
       capabilities = capabilities,
       instance = instanceId,
       instanceName = instanceName,
+      files = files,
+      filesError = filesError,
     }))
   end
 
@@ -303,6 +308,10 @@ return function(deps)
   end
 
   function M.instanceId() return instanceId end
+
+  function M.setFingerprint(fingerprint, why)
+    files, filesError = fingerprint, (fingerprint == nil) and (why or "unknown") or nil
+  end
 
   return M
 end

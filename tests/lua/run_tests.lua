@@ -1937,6 +1937,25 @@ test("references outside the chosen tags are refused, at both ends", function()
   target:close()
 end)
 
+print("=== extension fingerprint ===")
+test("fsio.contentHash matches the server's and ignores carriage returns", function()
+  -- Pinned in tests/test_extension_check.py too.
+  equals(core.fsio.contentHash("hello\nworld"), 2731407353, "the shared value")
+  equals(core.fsio.contentHash("hello\r\nworld"), 2731407353, "CRLF hashes like LF")
+end)
+
+test("fsio.fingerprint lists the extension's own code", function()
+  local files = core.fsio.fingerprint(EXT_DIR)
+  check(files ~= nil, "readable")
+  check(files["ws.lua"] ~= nil, "a top-level module")
+  check(files["commands/rig.lua"] ~= nil, "a command module, by relative path")
+  check(files["package.json"] ~= nil, "the manifest")
+  equals(files["__pref.lua"], nil, "not what Aseprite writes itself")
+  local missing, why = core.fsio.fingerprint(app.fs.joinPath(EXT_DIR, "no-such-dir"))
+  equals(missing, nil, "an unreadable folder gives no fingerprint")
+  check(type(why) == "string", "but a reason")
+end)
+
 print("=== wire path ===")
 test("empty arrays encode as [] on the wire", function()
   -- Caught live: the encoder spaces the placeholder differently from the

@@ -39,6 +39,12 @@ has granted file access. Answers even when nothing is connected — it is the to
 you use to diagnose. Calling it triggers the file-access probe, so the Security
 dialog may appear here.
 
+`extensionUpToDate` says whether that window runs the same extension as the
+server's copy; when it is `false`, `staleFiles` names the files that differ (or
+`extensionPredatesCheck` says the extension is older than the check), every
+other tool fails with `EXTENSION_OUTDATED`, and `hint` says how to fix it.
+`extensionCheck` explains a window whose extension could not be checked.
+
 `instance` is the window this session's calls go to. With several windows
 connected, `instances` lists each with its `id`, `name`, active `document`,
 open `documents` and `selected` flag; until the session chooses, the reply

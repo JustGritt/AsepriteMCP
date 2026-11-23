@@ -92,6 +92,7 @@ def test_error_codes_match_the_lua_side():
     python_codes = {code.value for code in ErrorCode}
 
     # The Lua side never raises these: they are produced by the server itself.
-    server_only = {"ASEPRITE_NOT_CONNECTED", "TIMEOUT", "UNAUTHORIZED", "INSTANCE_REQUIRED"}
+    server_only = {"ASEPRITE_NOT_CONNECTED", "TIMEOUT", "UNAUTHORIZED", "INSTANCE_REQUIRED",
+                   "EXTENSION_OUTDATED"}
     assert lua_codes <= python_codes, f"Lua has codes Python lacks: {lua_codes - python_codes}"
     assert python_codes - lua_codes == server_only
