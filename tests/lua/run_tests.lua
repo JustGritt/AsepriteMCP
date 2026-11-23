@@ -1383,7 +1383,10 @@ test("sprite.open finds a tab however the path is spelled", function()
   check(app.sprite == tab, "other slashes reach the tab")
   newSprite(4, 4)
   count = count + 1
-  local dotted = app.fs.joinPath(app.fs.filePath(path), "x", "..", app.fs.fileName(path))
+  -- Up and back into the same folder: a ".." through a folder that does not
+  -- exist only resolves on Windows, which simplifies the path as text first.
+  local dir = app.fs.filePath(path)
+  local dotted = app.fs.joinPath(dir, "..", app.fs.fileName(dir), app.fs.fileName(path))
   equals(call("sprite.open", { path = dotted }).alreadyOpen, true, "a .. in the path")
   check(app.sprite == tab, "a .. reaches the tab")
   if app.os.windows then
