@@ -32,7 +32,9 @@ from tests.conftest import text_of, tiny_png
 #   (docs/ANIMATION.md).
 # - select_instance, ~330 bytes: without it, two Aseprite windows on one server
 #   cannot be told apart and every call is refused (docs/SETUP.md).
-TOOL_LIST_BUDGET = 18_250
+# - export_poses and import_poses, ~870 bytes: without them a character that
+#   shares a body is animated again from scratch, pose by pose (#32).
+TOOL_LIST_BUDGET = 19_100
 
 
 def compact(value) -> int:

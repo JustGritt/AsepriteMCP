@@ -1,6 +1,6 @@
 # Tool reference
 
-46 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
+48 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
 its place only if it helps the agent understand, modify, inspect or safely
 preserve the sprite. The sheet tools take it one past that range, because nothing
 else gets a game's sprite sheet in as frames or back out as a PNG.
@@ -404,7 +404,8 @@ you pass.
 
 A rig animates a character as part layers posed from a rest frame, instead of
 editing the previous frame. [ANIMATION.md](ANIMATION.md#3-the-rig-implemented)
-has the design and a worked walk. All four are batchable.
+has the design and a worked walk. The first four are batchable; the pose
+template tools read and write files and are called directly.
 
 ### `split_layer(layer, x, y, rows, parts, frame=None)`
 Moves pixels out of a flat drawing into part layers. `rows` is a label grid in
@@ -441,7 +442,35 @@ its leader.
 ### `refresh_rig(frames=None, force=False)`
 Rebuilds every posed cel from its saved recipe, sources first, then the
 outlines. Use it after changing the rest drawing or a drawing other frames
-reuse. Hand-edited cels are kept and listed unless `force`.
+reuse, and after drawing a part by hand: the outline follows a new silhouette
+on the next pose or refresh of that frame. Hand-edited cels are kept and
+listed unless `force`.
+
+### `export_poses(path, tags=None)`
+Saves the rigged sprite's tags (default all) as a `.json` pose template in an
+allowed directory: the frame layout, durations, tag ranges and directions, each
+frame's pose per part, and the pixels of parts drawn by hand, plus a fingerprint
+of each part's rest drawing. It replaces an earlier template at the same path,
+never another file. A pose that takes its drawing from a frame outside the
+chosen tags is refused: export that tag too. The reply is a summary
+(`frames`, `tags`, `drawn`), not the template.
+
+### `import_poses(path, tags=None, drawings="auto")`
+Rebuilds a template's tags (default all) on the active rigged sprite, as one
+undo step. Frames are appended in template order; when the template's rest
+frame starts a tag and this sprite's rest frame is its last, untagged frame,
+it is reused, so a fresh sprite ends up laid out like the template. Every frame
+is posed from this sprite's own rest drawing, with follower offsets recomputed
+for this rig, and the outline redrawn.
+
+Parts drawn by hand in the template are copied only onto parts whose rest
+drawing matches the template's (`auto`: shared legs, not another role's torso),
+always (`copy`) or never (`skip`). Parts not copied are left hidden, and listed
+in `toDraw` as `part@frame`: draw over them, then `refresh_rig` so the frames
+that reuse them follow. The reply also lists the new `frames` and `tags`,
+`copied` drawings, template parts this rig lacks (`ignoredParts`) and rig parts
+the template lacks, which stay at rest (`restPoseParts`). A tag name the sprite
+already has is refused.
 
 ---
 

@@ -53,6 +53,8 @@ conversation and every image stays in it, so get there in few calls:
   the rest frame, never from the last one. Draw a new part drawing on the frame
   that first needs it and reuse it elsewhere by frame. refresh_rig after
   changing the rest frame. get_region(by_layer=true) shows which part is where.
+  A character sharing another's part names gets its animations with
+  import_poses from that one's export_poses template.
 - For other edits, build frames from earlier ones: duplicate_frame, then
   shift_cel, flip_cel, copy_cel or replace_color, and redraw only what changed.
 - Group the edits for one step into a single batch, with preview=true when you

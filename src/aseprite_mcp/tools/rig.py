@@ -8,15 +8,53 @@ the file keeps. docs/ANIMATION.md has the design.
 
 from __future__ import annotations
 
-from typing import Any
+import json
+import os
+from pathlib import Path
+from typing import Any, Literal
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import BaseModel
 
 from ..bridge.protocol import BridgeError, ErrorCode
 from ..colors import normalize_color
+from ..paths import resolve_in_sandbox
 from .base import ToolContext, as_json
 from .drawing import OUTSIDE, TRANSPARENT, _target, _uneven_rows
+
+# Pose templates are JSON: readable, diffable, and written by the server, so
+# Aseprite needs no file access for them. See docs/ANIMATION.md, "Templates".
+TEMPLATE_SUFFIXES = frozenset({".json"})
+TEMPLATE_FORMAT = "aseprite-mcp-poses"
+
+
+def _is_template(path: Path) -> bool:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("format") == TEMPLATE_FORMAT
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _read_template(path: Path) -> dict[str, Any]:
+    try:
+        template = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise BridgeError(
+            ErrorCode.INVALID_PARAMS, f"Could not read {path.name} as JSON: {exc}"
+        ) from exc
+    if not isinstance(template, dict) or template.get("format") != TEMPLATE_FORMAT:
+        raise BridgeError(
+            ErrorCode.INVALID_PARAMS,
+            f"{path.name} is not a pose template. Make one with export_poses.",
+        )
+    return template
+
+
+def _check_tags(tags: list[str] | None) -> None:
+    if tags is not None and not tags:
+        raise BridgeError(
+            ErrorCode.INVALID_PARAMS, "tags must name at least one tag, or be left out for all."
+        )
 
 
 # No field descriptions: the tool descriptions say what each field does, and
@@ -161,4 +199,64 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             params["force"] = True
         return as_json(
             await ctx.call("rig.refresh", params, timeout=ctx.config.render_timeout)
+        )
+
+    @mcp.tool(
+        title="Export poses",
+        description=(
+            "Save the rigged sprite's tags (default all) as a .json pose template: frames, "
+            "timing, poses and hand-drawn parts, for import_poses on another character."
+        ),
+    )
+    async def export_poses(path: str, tags: list[str] | None = None) -> str:
+        _check_tags(tags)
+        resolved = resolve_in_sandbox(path, ctx.config.allowed_dirs, suffixes=TEMPLATE_SUFFIXES)
+        replaced = resolved.exists()
+        # Re-exporting a template is the normal loop; any other file is not ours.
+        if replaced and not _is_template(resolved):
+            raise BridgeError(
+                ErrorCode.INVALID_PARAMS,
+                f"{resolved.name} exists and is not a pose template. Choose another path.",
+            )
+        params: dict[str, Any] = {}
+        if tags is not None:
+            params["tags"] = tags
+        reply = await ctx.call("rig.exportPoses", params, timeout=ctx.config.render_timeout)
+        template = reply.get("template")
+        if not isinstance(template, dict):
+            raise BridgeError(ErrorCode.LUA_ERROR, "Aseprite returned no template.")
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        temp = resolved.with_suffix(".json.tmp")
+        temp.write_text(json.dumps(template, indent=1) + "\n", encoding="utf-8")
+        os.replace(temp, resolved)
+        return as_json({
+            "path": str(resolved),
+            "frames": reply.get("frames"),
+            "tags": reply.get("tags"),
+            "drawn": reply.get("drawn") or None,
+            "replaced": replaced or None,
+        })
+
+    @mcp.tool(
+        title="Import poses",
+        description=(
+            "Rebuild a pose template's tags (default all) on the rigged sprite from its own "
+            "rest drawing. Hand-drawn parts are copied where the rest drawing matches (auto), "
+            "always or never; the reply lists what is left to draw."
+        ),
+    )
+    async def import_poses(
+        path: str,
+        tags: list[str] | None = None,
+        drawings: Literal["auto", "copy", "skip"] = "auto",
+    ) -> str:
+        _check_tags(tags)
+        resolved = resolve_in_sandbox(
+            path, ctx.config.allowed_dirs, suffixes=TEMPLATE_SUFFIXES, must_exist=True
+        )
+        params: dict[str, Any] = {"template": _read_template(resolved), "drawings": drawings}
+        if tags is not None:
+            params["tags"] = tags
+        return as_json(
+            await ctx.call("rig.importPoses", params, timeout=ctx.config.render_timeout)
         )

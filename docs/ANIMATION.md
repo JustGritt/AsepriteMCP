@@ -6,7 +6,8 @@ what is built, and what comes next.
 | Part | Status |
 | --- | --- |
 | Rigging: part layers, rest frame, poses, outline (section 3) | **Implemented**: `split_layer`, `define_rig`, `pose_frame`, `refresh_rig`, `get_region(by_layer=true)` |
-| Motion presets and templates (section 4) | Next |
+| Pose templates: one body's animations reused by another (section 3) | **Implemented**: `export_poses`, `import_poses` (#32) |
+| Motion presets beyond templates, landmarks (section 4) | Next |
 | Reference-to-sprite pipeline (section 2) | Proposed |
 | Directions (section 5) | Later: the art in use today is side-view only |
 
@@ -176,8 +177,10 @@ to point at the rest frame, and re-pose frames whose sources moved.
 | `pose_frame` | Builds one frame from the rest frame: per part `[dx, dy]` or `{dx, dy, frame, layer, recolor, hide}`. Unlisted parts keep their pose, or take the rest pose on a fresh frame. Replies with the figure's box and any part that no longer touches the others. |
 | `refresh_rig` | Re-applies every saved pose after the rest drawing or a source drawing changed, and redraws outlines. |
 | `get_region(by_layer=true)` | The pixel grid labelled by the layer showing at each pixel: the anatomy view. |
+| `export_poses` | Saves the rig's tags as a JSON pose template. See Templates below. |
+| `import_poses` | Rebuilds a template's tags on another rigged sprite from its own rest drawing. |
 
-All but `get_region` are batchable: a whole walk is one batch and one undo step.
+The first four are batchable: a whole walk is one batch and one undo step.
 
 ### A walk, end to end
 
@@ -207,6 +210,39 @@ one. Its idle differed by 7 pixels where the original bends the knees, which is
 a new leg drawing to make, not something the rig should guess. A test edit to
 the rest torso then reached all six frames with one `refresh_rig`.
 
+### Templates
+
+Characters that share a body share their motion. A soldier and a medic of the
+same body differ in torso, hat and colors, not in how their legs walk, so the
+second should not be animated again pose by pose.
+
+`export_poses` saves a rigged sprite's tags as a JSON template: the frame
+layout and timing, each frame's pose per part (offset, source frame, source
+part, recolor, hidden), and the pixels of the parts drawn by hand, such as a
+passing leg or a body lying down. `import_poses` rebuilds those tags on another
+rigged sprite with the same part names, from that sprite's own rest drawing:
+
+- **Poses are replayed, not pixels.** A part the two bodies share moves the
+  same way; a part that differs (the medic's coat) keeps its own drawing and
+  moves exactly as the template's did.
+- **Hand drawings are copied only where they fit.** Each part's rest drawing is
+  fingerprinted. A part whose rest drawing matches gets the template's hand
+  drawings; one that differs is left hidden on those frames and listed to draw.
+  `drawings="copy"` or `"skip"` overrides the guess.
+- **Followers are recomputed.** Offsets are stored where each part ended up and
+  made relative to the importing rig's leaders, so the two rigs need not agree
+  on which part follows which.
+- **The layout carries over.** On a fresh sprite the template's rest frame lands
+  on the sprite's own, so the frame numbers and tags come out as in the source.
+
+On a copy of the game's 18 px soldier, a 2 KB template carried its idle and
+4-frame walk to a variant with a different torso: the legs were identical on
+every frame, including the two hand-drawn passing legs, copied automatically,
+and the torso moved exactly as the original's did, with nothing left to draw.
+
+Not covered yet: retargeting between bodies of different proportions, and
+parametrised presets (stride length, bob height).
+
 ### With a game importer
 
 Part layers are flat, top-level layers, so an importer that draws every
@@ -228,12 +264,11 @@ purpose: importers differ in how they treat them.
   poses (anticipation, strike, impact, recovery), selective in-betweens,
   uneven durations, holds and deliberate snaps. Whole-pixel moves and cleanup
   beat smooth rotation or scaling at small sizes.
-- **Templates.** Characters that share a body (every soldier, every goblin)
-  share their motion. Export a file's poses as data and apply them to another
-  rigged file with the same part names: draw the new role's parts, apply
-  `walk`, fix a frame or two. This is the first preset system: presets named
-  by state (`idle/breathing`, `hurt/light_hit`, `attack/melee_slash`,
-  `movement/walk`), written against part names, not pixel coordinates.
+- **Presets.** Templates (section 3) are the first preset system: a library of
+  them named by state (`idle/breathing`, `hurt/light_hit`, `attack/melee_slash`,
+  `movement/walk`), written against part names, not pixel coordinates. Next:
+  parameters such as stride length and bob height, and retargeting between
+  bodies of different proportions.
 - **Landmarks.** Feet contacts, head, hands and weapon tracked per frame from
   the part layers, so a planted foot that slides is reported rather than
   spotted.
@@ -301,7 +336,7 @@ and per-view files exist only for the views a character needs.
    bounds.
 2. **Rigging MVP.** Done: layered parts first, flat sprites through
    `split_layer` with correction.
-3. **Idle and hurt.** Pose templates per body, loop checks.
+3. **Idle and hurt.** Pose templates per body: done (#32). Loop checks next.
 4. **Attack key poses.** Anticipation, impact, recovery, and selective redraw
    for complex silhouettes.
 5. **Walk and run.** Foot contacts and landmark checks.

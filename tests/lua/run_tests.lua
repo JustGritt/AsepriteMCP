@@ -1761,6 +1761,182 @@ test("a rig survives save and reopen", function()
   app.sprite:close()
 end)
 
+print("=== rig templates ===")
+
+--- The rigged figure with an idle (1-2) and a walk (3-5) whose passing leg is
+-- drawn by hand on frame 4 and reused, recolored, on frame 5.
+local function templateSource(follows)
+  local sprite = figure()
+  call("rig.define", {
+    parts = { "leg_far", "torso", "leg_near", "head", "hat" },
+    follows = follows == false and nil or { hat = "head" },
+    outline = { color = INK, parts = { "leg_far", "torso", "leg_near", "head" } },
+  })
+  for _ = 1, 4 do call("frame.create", {}) end
+  call("rig.pose", { frame = 2, parts = { torso = { dy = 1 }, head = { dy = 1 },
+    hat = follows == false and { dy = 1 } or nil } })
+  call("rig.pose", { frame = 3, parts = {} })
+  call("rig.pose", { frame = 4, parts = { leg_near = { hide = true }, torso = { dy = -1 },
+    head = { dy = -1 }, hat = follows == false and { dy = -1 } or nil } })
+  call("draw.pixels", { layer = "leg_near", frame = 4, pixels = {
+    { x = 6, y = 8, color = BOOT }, { x = 6, y = 9, color = BOOT } } })
+  -- A hand drawing changes the silhouette; the outline follows on the next
+  -- pose or refresh of that frame, as an agent would do.
+  call("rig.refresh", { frames = { 4 } })
+  call("rig.pose", { frame = 5, parts = { leg_near = { frame = 4 },
+    leg_far = { frame = 4, layer = "leg_near", recolor = { [BOOT] = SHADE }, dx = -1 } } })
+  call("tag.create", { name = "idle", from = 1, to = 2 })
+  call("tag.create", { name = "walk", from = 3, to = 5, direction = "pingpong" })
+  for f, ms in ipairs({ 300, 300, 80, 80, 80 }) do
+    call("frame.setDuration", { frame = f, durationMs = ms })
+  end
+  return sprite
+end
+
+--- The same figure, rest frame only. `torsoMark` adds a pixel to its torso, so
+-- its rest drawing no longer matches the template's.
+local function templateTarget(torsoMark, follows)
+  local sprite = figure()
+  if torsoMark then
+    call("draw.pixels", { layer = "torso", frame = 1, pixels = { { x = 5, y = 4, color = GOLD } } })
+  end
+  call("rig.define", {
+    parts = { "leg_far", "torso", "leg_near", "head", "hat" },
+    follows = follows == false and nil or { hat = "head" },
+    outline = { color = INK, parts = { "leg_far", "torso", "leg_near", "head" } },
+  })
+  return sprite
+end
+
+local function composite(sprite, f)
+  local image = Image(sprite.width, sprite.height, ColorMode.RGB)
+  image:clear(0)
+  image:drawSprite(sprite, f)
+  return image
+end
+
+local function exportFrom(sprite, tags)
+  app.sprite = sprite
+  return call("rig.exportPoses", { tags = tags }).template
+end
+
+local function importInto(sprite, template, extra)
+  app.sprite = sprite
+  local params = { template = template }
+  for k, v in pairs(extra or {}) do params[k] = v end
+  return call("rig.importPoses", params)
+end
+
+test("rig.exportPoses stores the layout, the poses and the hand drawings", function()
+  local source = templateSource()
+  local reply = call("rig.exportPoses", {})
+  local t = reply.template
+  equals(reply.frames, 5, "every tagged frame")
+  equals(reply.drawn, 1, "one hand-drawn part")
+  equals(t.format, "aseprite-mcp-poses", "format named")
+  equals(t.rest, 1, "rest frame")
+  equals(t.frames[1].rest, true, "the rest frame is marked, not posed")
+  equals(t.frames[2].parts.torso.dy, 1, "idle drops the torso")
+  equals(t.frames[2].parts.hat.dy, 1, "a follower is stored where it ended up")
+  check(t.frames[4].parts.leg_near.drawn ~= nil, "the passing leg is stored as a drawing")
+  equals(t.frames[4].parts.leg_near.drawn.rows[1], "a", "as rows")
+  equals(t.frames[4].parts.leg_near.drawn.legend.a, BOOT, "with a legend")
+  local far = t.frames[5].parts.leg_far
+  equals(far.frame, 4, "a source frame stays a frame number")
+  equals(far.layer, "leg_near", "with its source part")
+  equals(far.recolor[BOOT], SHADE, "and its recolor")
+  equals(t.tags[2].direction, "pingpong", "tag direction kept")
+  check(t.restHashes.torso ~= nil, "rest drawings fingerprinted")
+  expectError("rig.exportPoses", { tags = { "run" } }, "INVALID_PARAMS", "unknown tag")
+  source:close()
+end)
+
+test("rig.importPoses rebuilds the animation pixel for pixel on the same body", function()
+  local source = templateSource()
+  local template = exportFrom(source)
+  local target = templateTarget()
+  local reply = importInto(target, template)
+  equals(#target.frames, 5, "four frames added to the rest frame")
+  equals(reply.tags[1].from, 1, "idle starts on the target's own rest frame")
+  equals(reply.tags[2].from, 3, "walk follows it")
+  equals(reply.copied[1], "leg_near@4", "the passing leg was copied: same leg at rest")
+  equals(reply.toDraw, nil, "nothing left to draw")
+  for f = 1, 5 do
+    check(composite(target, f):isEqual(composite(source, f)), "frame " .. f .. " matches")
+  end
+  equals(target.tags[2].aniDir, AniDir.PING_PONG, "tag direction")
+  equals(doc.msFromSeconds(target.frames[4].duration), 80, "durations")
+  expectError("rig.importPoses", { template = template }, "INVALID_PARAMS", "a tag clash")
+  call("history.undo", {})
+  equals(#target.frames, 1, "one undo removes the whole import")
+  equals(#target.tags, 0, "and its tags")
+  source:close()
+  target:close()
+end)
+
+test("a part that differs keeps its own drawing and its hand drawings are listed", function()
+  local source = templateSource()
+  local template = exportFrom(source)
+  local target = templateTarget(true)
+  local reply = importInto(target, template)
+  equals(px(target, "torso", 2, 5, 5), GOLD, "the target's own torso, lowered by the idle")
+  equals(px(target, "leg_near", 4, 6, 9), BOOT, "the shared leg drawing was copied")
+  source:close()
+  target:close()
+
+  local skipSource = templateSource()
+  local skipTarget = templateTarget()
+  local skipped = importInto(skipTarget, exportFrom(skipSource), { drawings = "skip" })
+  equals(skipped.toDraw[1], "leg_near@4", "skip leaves the passing leg to draw")
+  equals(px(skipTarget, "leg_near", 4, 6, 9), nil, "hidden until drawn")
+  call("draw.pixels", { layer = "leg_near", frame = 4, pixels = { { x = 6, y = 9, color = BOOT } } })
+  call("rig.refresh", {})
+  equals(px(skipTarget, "leg_near", 5, 6, 9), BOOT, "drawing it reaches the frames that reuse it")
+  skipSource:close()
+  skipTarget:close()
+end)
+
+test("templates survive a different rig: follows, extra and missing parts", function()
+  local source = templateSource(false)
+  local template = exportFrom(source)
+  local target = templateTarget(false, true)
+  importInto(target, template)
+  for f = 1, 5 do
+    check(composite(target, f):isEqual(composite(source, f)),
+      "frame " .. f .. " matches though only the target's hat follows its head")
+  end
+  source:close()
+  target:close()
+
+  local other = templateSource()
+  local t = exportFrom(other)
+  local cape = figure()
+  call("rig.define", { parts = { "leg_far", "torso", "leg_near", "head", "cape" } })
+  local reply = importInto(cape, t, { tags = { "idle" } })
+  equals(reply.ignoredParts[1], "hat", "a template part the target lacks is reported")
+  equals(reply.restPoseParts[1], "cape", "a target part the template lacks stays at rest")
+  other:close()
+  cape:close()
+end)
+
+test("references outside the chosen tags are refused, at both ends", function()
+  local source = templateSource()
+  call("rig.pose", { frame = 5, parts = { torso = { frame = 2 } } })
+  expectError("rig.exportPoses", { tags = { "walk" } }, "INVALID_PARAMS",
+    "walk takes a drawing from idle")
+  local full = call("rig.exportPoses", {}).template
+  local target = templateTarget()
+  app.sprite = target
+  expectError("rig.importPoses", { template = full, tags = { "walk" } }, "INVALID_PARAMS",
+    "importing walk without idle")
+  expectError("rig.importPoses", { template = full, tags = { "jump" } }, "INVALID_PARAMS",
+    "unknown tag")
+  expectError("rig.importPoses", { template = { format = "other" } }, "INVALID_PARAMS",
+    "not a template")
+  source:close()
+  target:close()
+end)
+
 print("=== wire path ===")
 test("empty arrays encode as [] on the wire", function()
   -- Caught live: the encoder spaces the placeholder differently from the
