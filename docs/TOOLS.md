@@ -1,6 +1,6 @@
 # Tool reference
 
-48 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
+49 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
 its place only if it helps the agent understand, modify, inspect or safely
 preserve the sprite. The sheet tools take it one past that range, because nothing
 else gets a game's sprite sheet in as frames or back out as a PNG.
@@ -157,6 +157,32 @@ import_spritesheet("hero.png", 32, 48, y=192, columns=2, rows=3)   # tall frames
 # ...edit, save_sprite("hero_tall.aseprite")...
 export_spritesheet("hero_new.png", columns=2, onto="hero_new.png", y=192)
 ```
+
+### `import_image(path, width=None, height=None, layer="Reference", frame=None, palette=None, transparent=None)`
+Puts an image file (PNG, JPEG, BMP, GIF, TGA or WebP, inside an allowed
+directory) on a layer of the active sprite, as one undo step: a master design or
+a photo to work from. The layer is created at the bottom of the stack if it does
+not exist, and importing again replaces its cel on that frame.
+
+- **Size and place.** By default the image is scaled to fit the canvas keeping
+  its aspect ratio, and centered; `width` or `height` sets the size, and one
+  alone sets the other by the aspect ratio. `shift_cel` moves it afterwards.
+- **Scaling.** Shrinking averages every source pixel a target pixel covers
+  (`method: "area average"`), since Aseprite's own resize samples a few pixels
+  and aliases badly from 1024 to 32. Growing repeats pixels (`"nearest"`).
+- **`transparent`** removes a flat background before scaling: a hex color, or
+  `"corner"` for the top-left pixel's color, matched within a small tolerance.
+  Image generators usually output one; left in, it fills the canvas.
+- **`palette`** snaps every pixel to the nearest of the given hex colors, or of
+  the sprite's palette with `"sprite"`, and makes alpha all or nothing. Then
+  `get_region(layer="Reference")` reads it as a grid to trace or copy into
+  `draw_rows`. Without it the guide keeps its averaged colors, often thousands.
+
+The file is read by Aseprite (through `fsio.lua`, so no new Security prompt once
+the extension is trusted) from a private copy, never from a tab that may hold
+it. The reply gives the `box` it landed in, the `method`, `distinctColors`, and
+`keyedOut` / `snappedTo` when used. Hide the layer with `set_layer_visibility`
+before judging the art on its own.
 
 ---
 

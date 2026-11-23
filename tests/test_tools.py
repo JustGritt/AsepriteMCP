@@ -1483,6 +1483,48 @@ class TestPoseTemplates:
         assert not aseprite.requests
 
 
+class TestImportImage:
+    async def test_sends_the_resolved_path_and_options(self, server, aseprite, sandbox):
+        mcp, _ = server
+        (sandbox / "master.jpg").write_bytes(b"")
+        await ok(mcp, "import_image", path="master.jpg", width=32, layer="ref_master",
+                 frame=2, palette=["#000", "#F4F1E8"])
+        params = aseprite.last("image.import")["params"]
+        assert params == {
+            "path": str((sandbox / "master.jpg").resolve()),
+            "layer": "ref_master",
+            "width": 32,
+            "frame": 2,
+            "palette": ["#000000ff", "#f4f1e8ff"],
+        }
+        await ok(mcp, "import_image", path="master.jpg", palette="sprite")
+        assert aseprite.last("image.import")["params"]["palette"] == "sprite"
+        await ok(mcp, "import_image", path="master.jpg", transparent="#F0F")
+        assert aseprite.last("image.import")["params"]["transparent"] == "#ff00ffff"
+        await ok(mcp, "import_image", path="master.jpg", transparent="corner")
+        assert aseprite.last("image.import")["params"]["transparent"] == "corner"
+        await ok(mcp, "import_image", path="master.jpg")
+        assert aseprite.last("image.import")["params"] == {
+            "path": str((sandbox / "master.jpg").resolve()), "layer": "Reference",
+        }
+
+    async def test_refuses_bad_input_before_reaching_aseprite(self, server, aseprite, sandbox, tmp_path):
+        mcp, _ = server
+        (sandbox / "master.png").write_bytes(b"")
+        (sandbox / "notes.txt").write_bytes(b"")
+        (tmp_path / "outside.png").write_bytes(b"")
+        assert "PATH_NOT_ALLOWED" in await err(mcp, "import_image", path="notes.txt")
+        assert "PATH_NOT_ALLOWED" in await err(mcp, "import_image", path=str(tmp_path / "outside.png"))
+        assert "missing.png" in await err(mcp, "import_image", path="missing.png")
+        assert "width" in await err(mcp, "import_image", path="master.png", width=0)
+        assert "height" in await err(mcp, "import_image", path="master.png", height=5000)
+        assert "palette" in await err(mcp, "import_image", path="master.png", palette=[])
+        assert "INVALID_PARAMS" in await err(mcp, "import_image", path="master.png",
+                                             palette=["not a color"])
+        assert "layer" in await err(mcp, "import_image", path="master.png", layer=" ")
+        assert not aseprite.requests
+
+
 TEMPLATE_FIXTURE = {"format": "aseprite-mcp-poses", "version": 1, "frames": [], "tags": []}
 
 
@@ -1535,6 +1577,7 @@ MINIMAL_ARGUMENTS = {
     "select_instance": {"instance": "aseprite"},
     "export_poses": {"path": "poses.json"},
     "import_poses": {"path": "fixture.json"},
+    "import_image": {"path": "fixture.png"},
 }
 
 

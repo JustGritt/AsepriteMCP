@@ -1456,6 +1456,131 @@ test("unknown command is rejected by name", function()
   check(dispatch["does.not.exist"] == nil, "unknown command is absent from the dispatch table")
 end)
 
+print("=== import image ===")
+
+--- Write an image file from rows of color names, through a throwaway sprite.
+local SWATCH = {
+  k = { 0, 0, 0, 255 }, w = { 255, 255, 255, 255 }, r = { 255, 0, 0, 255 },
+  g = { 128, 128, 128, 255 }, h = { 255, 255, 255, 100 }, m = { 250, 4, 252, 255 },
+}
+local function writeImage(name, rows)
+  local active = app.sprite
+  local sprite = Sprite(#rows[1], #rows, ColorMode.RGB)
+  local image = Image(#rows[1], #rows, ColorMode.RGB)
+  image:clear(app.pixelColor.rgba(0, 0, 0, 0))
+  for y, row in ipairs(rows) do
+    for x = 1, #row do
+      local c = SWATCH[row:sub(x, x)]
+      if c then image:drawPixel(x - 1, y - 1, app.pixelColor.rgba(c[1], c[2], c[3], c[4])) end
+    end
+  end
+  sprite.cels[1].image = image
+  local path = tempPath(name)
+  sprite:saveAs(path)
+  sprite:close()
+  if active then app.sprite = active end
+  return path
+end
+
+local function pixel(sprite, layerName, x, y)
+  local layer = doc.resolveLayer(sprite, layerName)
+  local cel = layer:cel(1)
+  local v = cel.image:getPixel(x - cel.position.x, y - cel.position.y)
+  return app.pixelColor.rgbaR(v), app.pixelColor.rgbaG(v), app.pixelColor.rgbaB(v),
+    app.pixelColor.rgbaA(v)
+end
+
+test("image.import shrinks by averaging and lands on a bottom layer", function()
+  local path = writeImage("checker.png", { "kwkw", "wkwk", "kwkw", "wkwk" })
+  local sprite = newSprite(2, 2)
+  local reply = call("image.import", { path = path })
+  equals(reply.method, "area average", "shrinking averages")
+  equals(reply.box[3], 2, "fit to the canvas")
+  equals(reply.created, true, "the layer was created")
+  equals(sprite.layers[1].name, "Reference", "at the bottom of the stack")
+  local r, g, b, a = pixel(sprite, "Reference", 0, 0)
+  check(r >= 127 and r <= 128 and g == r and b == r, "black and white average to grey: " .. r)
+  equals(a, 255, "opaque where the source was")
+  equals(reply.distinctColors, 1, "one color left")
+  sprite:close()
+end)
+
+test("image.import keeps the aspect ratio and centers", function()
+  local path = writeImage("wide.png", { "rrrrrrrr", "rrrrrrrr", "rrrrrrrr", "rrrrrrrr" })
+  local sprite = newSprite(8, 8)
+  local fit = call("image.import", { path = path })
+  equals(fit.box[2], 2, "centered vertically")
+  equals(fit.box[4], 4, "half as tall as wide")
+  local sized = call("image.import", { path = path, width = 4 })
+  equals(sized.box[4], 2, "the other side follows the aspect ratio")
+  equals(sized.created, nil, "importing again reuses the layer")
+  equals(#sprite.layers, 2, "and adds none")
+  local grown = call("image.import", { path = writeImage("tiny.png", { "kw", "wk" }), width = 4 })
+  equals(grown.method, "nearest", "growing keeps hard pixels")
+  local r = pixel(sprite, "Reference", 3, 2)
+  equals(r, 0, "a black source pixel stays black when doubled")
+  sprite:close()
+end)
+
+test("image.import snaps to a palette for tracing", function()
+  local path = writeImage("greys.png", { "kgw.", "hhhh" })
+  local sprite = newSprite(4, 2)
+  local reply = call("image.import", { path = path, palette = { "#000000", "#ffffff" } })
+  equals(reply.snappedTo, 2, "two colors")
+  local r1 = pixel(sprite, "Reference", 1, 0)
+  check(r1 == 0 or r1 == 255, "grey snapped to black or white")
+  local _, _, _, a = pixel(sprite, "Reference", 0, 1)
+  equals(a, 0, "a mostly transparent pixel becomes transparent")
+  check(reply.distinctColors <= 2, "a grid get_region can read")
+  local region = call("inspect.region", { x = 0, y = 0, width = 4, height = 1, layer = "Reference" })
+  equals(region.rows[1]:sub(4, 4), ".", "transparent stays transparent")
+  sprite:close()
+end)
+
+test("image.import reads JPEG, snaps to the sprite palette, and is one undo", function()
+  local jpeg = writeImage("red.jpg", { "rrrr", "rrrr", "rrrr", "rrrr" })
+  local sprite = newSprite(4, 4)
+  local reply = call("image.import", { path = jpeg, layer = "ref_master" })
+  local r, g = pixel(sprite, "ref_master", 1, 1)
+  check(r > 200 and g < 60, "red survives the JPEG round trip")
+  call("history.undo", {})
+  equals(#sprite.layers, 1, "one undo removes the layer and its image")
+  sprite:setPalette(Palette(2))
+  sprite.palettes[1]:setColor(0, Color{ r = 0, g = 0, b = 0, a = 0 })
+  sprite.palettes[1]:setColor(1, Color{ r = 200, g = 10, b = 10 })
+  local snapped = call("image.import", { path = jpeg, palette = "sprite" })
+  equals(snapped.snappedTo, 1, "the sprite palette's opaque colors")
+  local sr = pixel(sprite, "Reference", 1, 1)
+  equals(sr, 200, "snapped to the palette red")
+  expectError("image.import", { path = tempPath("missing.png") }, "LUA_ERROR", "a missing file")
+  sprite:close()
+end)
+
+test("image.import keys out a flat background", function()
+  local path = writeImage("on_magenta.png", { "mmmm", "mrrm", "mrrm", "mmmm" })
+  local sprite = newSprite(4, 4)
+  local reply = call("image.import", { path = path, transparent = "corner",
+    palette = { "#ff0000" } })
+  equals(reply.keyedOut.color, "#fa04fcff", "the corner's own color")
+  equals(reply.keyedOut.pixels, 12, "every background pixel")
+  local _, _, _, a = pixel(sprite, "Reference", 0, 0)
+  equals(a, 0, "the background is gone")
+  local r = pixel(sprite, "Reference", 1, 1)
+  equals(r, 255, "the subject stays, snapped")
+  local explicit = call("image.import", { path = path, transparent = "#ff00ffff" })
+  equals(explicit.keyedOut.pixels, 12, "or a color named outright, within tolerance")
+  sprite:close()
+end)
+
+test("image.import works on an indexed sprite", function()
+  local path = writeImage("indexed_src.png", { "kw", "wk" })
+  local sprite = newSprite(2, 2, ColorMode.INDEXED)
+  local reply = call("image.import", { path = path })
+  equals(reply.box[3], 2, "placed")
+  check(doc.resolveLayer(sprite, "Reference"):cel(1) ~= nil, "with a cel")
+  sprite:close()
+end)
+
 print("=== rig ===")
 
 local SKIN, OLIVE, BOOT, SHADE, GOLD, INK =

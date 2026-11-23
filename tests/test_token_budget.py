@@ -34,7 +34,9 @@ from tests.conftest import text_of, tiny_png
 #   cannot be told apart and every call is refused (docs/SETUP.md).
 # - export_poses and import_poses, ~870 bytes: without them a character that
 #   shares a body is animated again from scratch, pose by pose (#32).
-TOOL_LIST_BUDGET = 19_100
+# - import_image, ~615 bytes: without it a reference image needed a throwaway
+#   script to shrink it and its own document to hold it (#23).
+TOOL_LIST_BUDGET = 19_700
 
 
 def compact(value) -> int:

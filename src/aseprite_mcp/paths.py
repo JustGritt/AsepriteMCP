@@ -39,6 +39,9 @@ SAVE_SUFFIXES = frozenset({".aseprite", ".ase"})
 # way to a PNG, and it leaves the document and its layers as they were.
 SHEET_SUFFIXES = frozenset({".png"})
 
+# Images import_image places on a reference layer: what Aseprite decodes.
+IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tga", ".webp"})
+
 
 def canonical(path):
     """Fully resolve a path for comparison purposes."""
