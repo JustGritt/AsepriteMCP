@@ -42,6 +42,9 @@ class ErrorCode(str, Enum):
     # Server-side only: several Aseprite windows are connected and the session
     # has not chosen one, so a command has nowhere safe to go.
     INSTANCE_REQUIRED = "INSTANCE_REQUIRED"
+    # Server-side only: the window's extension differs from the server's copy,
+    # so its replies cannot be trusted to mean what the tools expect (#16).
+    EXTENSION_OUTDATED = "EXTENSION_OUTDATED"
 
 
 class BridgeError(ToolError):

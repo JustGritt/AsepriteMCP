@@ -26,6 +26,7 @@ from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
 from ..config import Config
+from ..extension_check import ExtensionCopy, describe
 from .protocol import BridgeError, ErrorCode, decode_message, encode_request, error_from_response
 from .session import SessionFile, new_token
 
@@ -47,6 +48,17 @@ PORT_RETRY_SECONDS = 2.0
 # The id an extension without instance support is filed under.
 LEGACY_INSTANCE = "aseprite"
 
+# Commands an outdated extension may still answer: what get_connection_status
+# needs to say what is wrong. Everything else is refused (#16).
+DIAGNOSTIC_COMMANDS = frozenset({"app.status", "fs.probe"})
+
+INSTALL_HINT = (
+    "Reinstall it (scripts/install-extension.sh, or scripts/install-extension.ps1 on "
+    "Windows; an install made with --link needs no reinstall), then quit Aseprite "
+    "completely and reopen it. On macOS closing the window leaves Aseprite running: "
+    "use Cmd+Q."
+)
+
 
 @dataclass(eq=False)
 class Instance:
@@ -56,6 +68,11 @@ class Instance:
     name: str | None
     websocket: ServerConnection = field(repr=False)
     info: dict[str, Any] = field(default_factory=dict)
+    # The extension's own files as it reported them at load (path -> content
+    # hash), or why it could not read them. Neither: an extension from before
+    # the check, which is older than this server by definition.
+    files: dict[str, int] | None = field(default=None, repr=False)
+    files_error: str | None = None
 
     @property
     def label(self) -> str:
@@ -77,6 +94,10 @@ class AsepriteBridge:
         self._session: SessionFile | None = None
         self._bind_error: str | None = None
         self._acquire_task: asyncio.Task | None = None
+        directory = config.extension_dir
+        self._extension = (
+            ExtensionCopy(directory) if directory is not None and directory.is_dir() else None
+        )
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -241,6 +262,42 @@ class AsepriteBridge:
             "session); get_connection_status shows what each has open.",
         )
 
+    def extension_status(self, instance: Instance) -> dict[str, Any]:
+        """How the window's extension compares with this server's copy.
+
+        {} when there is nothing to compare with. Otherwise extensionUpToDate is
+        True, or False with staleFiles or extensionPredatesCheck. An extension
+        that could not read its own files gets only extensionCheck, saying why:
+        that is not counted against it.
+        """
+        if self._extension is None:
+            return {}
+        if instance.files is None:
+            if instance.files_error is not None:
+                return {"extensionCheck": f"not checked: {instance.files_error}"}
+            return {"extensionUpToDate": False, "extensionPredatesCheck": True}
+        stale = self._extension.differences(instance.files)
+        if stale:
+            return {"extensionUpToDate": False, "staleFiles": stale}
+        return {"extensionUpToDate": True}
+
+    def _outdated(self, instance: Instance) -> BridgeError | None:
+        status = self.extension_status(instance)
+        if status.get("extensionUpToDate") is not False:
+            return None
+        if status.get("extensionPredatesCheck"):
+            what = "predates the version check, so it is older than this server"
+        else:
+            what = (
+                "differs from this server's copy in "
+                f"{describe(status['staleFiles'])}"
+            )
+        return BridgeError(
+            ErrorCode.EXTENSION_OUTDATED,
+            f"The Aseprite extension in window {instance.label} {what}. Its replies "
+            f"cannot be trusted to mean what these tools expect. {INSTALL_HINT}",
+        )
+
     def match(self, selector: str) -> Instance | None:
         """A connected window by id, name, or unique id prefix; None if none match."""
         if selector in self._instances:
@@ -302,9 +359,13 @@ class AsepriteBridge:
         if not isinstance(instance_id, str) or not instance_id:
             instance_id = LEGACY_INSTANCE
         name = hello.get("instanceName")
+        files = hello.get("files")
+        files_error = hello.get("filesError")
         instance = Instance(
             id=instance_id,
             name=name if isinstance(name, str) and name else None,
+            files={str(k): v for k, v in files.items()} if isinstance(files, dict) else None,
+            files_error=str(files_error) if files_error else None,
             websocket=websocket,
             info={
                 "asepriteVersion": hello.get("asepriteVersion"),
@@ -410,7 +471,12 @@ class AsepriteBridge:
         disconnection and timeout, so no caller has to tell transport errors
         apart from Aseprite errors.
         """
-        client = self.resolve(instance).websocket
+        target = self.resolve(instance)
+        if command not in DIAGNOSTIC_COMMANDS:
+            outdated = self._outdated(target)
+            if outdated is not None:
+                raise outdated
+        client = target.websocket
 
         self._next_id += 1
         request_id = self._next_id

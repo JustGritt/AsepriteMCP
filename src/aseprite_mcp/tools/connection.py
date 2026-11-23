@@ -13,7 +13,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from ..bridge.protocol import BridgeError, ErrorCode
-from ..bridge.ws_server import Instance
+from ..bridge.ws_server import INSTALL_HINT, Instance
 from .base import ToolContext, as_json
 
 
@@ -38,6 +38,8 @@ async def _describe_all(ctx: ToolContext) -> list[dict[str, Any]]:
             "documents": status.get("documents"),
             "error": status.get("error"),
             "selected": True if instance.id == selected else None,
+            "outdated": True if ctx.bridge.extension_status(instance).get(
+                "extensionUpToDate") is False else None,
         })
     return out
 
@@ -97,6 +99,8 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
 
         status["instance"] = target.id
         status.update(target.info)
+        check = ctx.bridge.extension_status(target)
+        status.update(check)
         try:
             status.update(await ctx.call("app.status"))
         except BridgeError as exc:
@@ -111,6 +115,14 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         except BridgeError as exc:
             status["canWriteFiles"] = None
             status["probeError"] = exc.to_dict()
+
+        if check.get("extensionUpToDate") is False:
+            status["hint"] = (
+                "Aseprite is running an outdated copy of the aseprite-mcp extension, so "
+                "every other tool refuses with EXTENSION_OUTDATED. "
+                + INSTALL_HINT
+            )
+            return as_json(status)
 
         if status.get("canWriteFiles") is False:
             status["hint"] = (
