@@ -20,8 +20,15 @@ uv run pytest          # 205 tests, no Aseprite needed
 powershell -ExecutionPolicy Bypass -File scripts/install-extension.ps1
 ```
 
-Pass `-Link` to install a junction instead of a copy, so edits in the repo take
-effect on the next Aseprite restart. Pass `-Uninstall` to remove it.
+On macOS and Linux:
+
+```sh
+scripts/install-extension.sh
+```
+
+Pass `-Link` (`--link`) to install a junction or symlink instead of a copy, so
+edits in the repo take effect on the next Aseprite restart. Pass `-Uninstall`
+(`--uninstall`) to remove it.
 
 To install by hand instead: zip the contents of `extension/aseprite-mcp` as
 `aseprite-mcp.aseprite-extension` and use **Edit > Preferences > Extensions >
@@ -112,11 +119,27 @@ legends and preview history are separate for each HTTP session (the most recent
 128 sessions are remembered; stateless requests have no remembered history).
 Disconnecting a client leaves the server and other clients running.
 
-All clients still control **one live Aseprite session**: active document,
-selection, layers and undo history are shared. Serialization prevents tool
-internals from interleaving; it does not reserve a document across multiple tool
-calls. Coordinate work on different documents instead of running independent
-editing workflows at the same time.
+Clients that share **one Aseprite window** share its active document,
+selection, layers and undo history. Serialization prevents tool internals from
+interleaving; it does not reserve a document across multiple tool calls.
+
+To give agents separate documents, open **one Aseprite window per agent**. Every
+window connects to the same bridge on `32145` and identifies itself with an id,
+shown under **Instance** in **File > MCP Bridge...** (set
+`ASEPRITE_MCP_INSTANCE` before launching it to give it a name). With one window
+connected, every session uses it. With several, each session picks its own once
+with `select_instance`, by id, name or an open document such as
+`dragon.aseprite`; until it does, its calls fail with `INSTANCE_REQUIRED`
+rather than guess. The choice is part of the session's memory, alongside its
+legends and preview history. A client without MCP sessions names the window on
+every call with `aseprite_instance`.
+
+To open a second window, launch the executable directly; on macOS, `open` would
+bring the running copy forward instead:
+
+```sh
+ASEPRITE_MCP_INSTANCE=dragon /Applications/Aseprite.app/Contents/MacOS/aseprite &
+```
 
 Set `ASEPRITE_MCP_ALLOWED_DIRS` in the shared server's environment before starting
 it to include your project asset folders. This allowlist is shared by all
@@ -192,6 +215,7 @@ All optional. The defaults work.
 | `ASEPRITE_MCP_ALLOWED_DIRS` | `<repo>/sprites` | Directories the file tools (`open_sprite`, `save_sprite`, `import_spritesheet`, `export_spritesheet`) may touch, `;`-separated. Everything else is refused, including saving over a document you opened by hand from somewhere else. |
 | `ASEPRITE_MCP_PORT` | `32145` | Bridge port. Set it for **both** the server and Aseprite if you change it. On the Aseprite side a port typed into the connect dialog outranks this. |
 | `ASEPRITE_MCP_HOST` | `127.0.0.1` | Loopback only unless `ASEPRITE_MCP_ALLOW_NON_LOOPBACK=1`. Outranked by the connect dialog, same as the port. |
+| `ASEPRITE_MCP_INSTANCE` | unset | Aseprite only: a name for this window, shown in the connect dialog and accepted by `select_instance`. |
 | `ASEPRITE_MCP_TOKEN` | unset | Opt-in shared secret; set the same value in both environments. |
 | `ASEPRITE_MCP_TIMEOUT` | `5` | Seconds to wait for a normal command. |
 | `ASEPRITE_MCP_RENDER_TIMEOUT` | `30` | Seconds to wait for a render. |
@@ -241,15 +265,23 @@ answer looks like:
 
 ## Troubleshooting
 
+**`INSTANCE_REQUIRED`**
+More than one Aseprite window is connected and this session has not chosen one.
+`get_connection_status` lists them with what each has open; `select_instance`
+picks one by its id, its name or one of its documents. The id and name are
+shown in **File > MCP Bridge...** under Instance.
+
 **`ASEPRITE_NOT_CONNECTED`**
 Aseprite is not running, the extension is not installed, or the bridge was
 switched off. Open **File > MCP Bridge...**: it reports the address it
 is dialling, whether anything is listening there, and the last error.
 
 **The dialog flickers between Connected and Connecting**
-Two copies of Aseprite are running. Only one may be attached, and the server
-closes the older connection whenever a newer one arrives — so two instances take
-turns forever. Close one.
+Two copies of Aseprite are dialling the same port with an extension too old to
+identify itself. Such connections replace each other, so the two take turns
+forever. Update the extension in both (section 2): current versions send an
+instance id, and several windows then stay attached side by side. See
+[Multiple sessions](#multiple-sessions-one-shared-http-server).
 
 **`TIMEOUT` on the first preview or open**
 Almost always the Security dialog waiting for a click. Switch to Aseprite and

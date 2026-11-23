@@ -19,13 +19,20 @@ within 10 seconds, is closed.
   "protocolVersion": 1,
   "asepriteVersion": "1.3.18.3",
   "apiVersion": 41,
-  "capabilities": ["layer.uuid"]
+  "capabilities": ["layer.uuid"],
+  "instance": "a1b2c3",
+  "instanceName": "knight"
 }
 ```
 
 `capabilities` lets the server degrade gracefully on older 1.3.x builds rather
 than erroring. It is derived from `app.apiVersion`, never by poking at a
 document — see the note on callback safety in ARCHITECTURE.md.
+
+`instance` names this Aseprite process: six hex characters chosen when the
+extension loads, kept across reconnects, and different in a second copy of
+Aseprite. `instanceName` is optional, from `ASEPRITE_MCP_INSTANCE`. Both are
+shown in the connect dialog, and they are what `select_instance` matches.
 
 The server answers:
 
@@ -40,9 +47,15 @@ or, when `require_token` is on and the token does not match:
  "error": {"code": "UNAUTHORIZED", "message": "Bad or missing token."}}
 ```
 
-Only one extension may be attached. A second connection wins and the previous one
-is closed, which is what you want when Aseprite restarts and the stale socket has
-not timed out yet.
+Several extensions may be attached at once, one per `instance`. A connection
+with an `instance` that is already attached replaces the old socket, which is
+what you want when the extension reconnects and the stale socket has not timed
+out yet. A hello without `instance` (an older extension) is filed under the id
+`aseprite`, so among those the newest connection still wins.
+
+Which window a command goes to is decided on the server, per MCP session; the
+wire format does not change. See ARCHITECTURE.md, "Several windows, several
+sessions".
 
 ## Requests and responses
 

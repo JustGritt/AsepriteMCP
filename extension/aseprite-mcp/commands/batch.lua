@@ -9,7 +9,7 @@
 -- Only commands that edit the document. Renders and file access stay out: they
 -- need their own outPath handling, and undo/redo cannot run inside a
 -- transaction.
-local ALLOWED_PREFIXES = { "draw.", "cel.", "frame." }
+local ALLOWED_PREFIXES = { "draw.", "cel.", "frame.", "rig." }
 local ALLOWED = {
   ["layer.select"] = true,
   ["layer.create"] = true,

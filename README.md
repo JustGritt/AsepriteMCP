@@ -10,6 +10,7 @@ Edits land in the document you already have open, so you watch them happen.
 - Architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Wire protocol: [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
 - Tool reference: [`docs/TOOLS.md`](docs/TOOLS.md)
+- Animation and rigging: [`docs/ANIMATION.md`](docs/ANIMATION.md)
 
 ## Requirements
 
@@ -21,8 +22,13 @@ Edits land in the document you already have open, so you watch them happen.
 ```sh
 uv sync
 uv run pytest
-powershell -ExecutionPolicy Bypass -File scripts/install-extension.ps1
+scripts/install-extension.sh                                            # macOS, Linux
+powershell -ExecutionPolicy Bypass -File scripts/install-extension.ps1  # Windows
 ```
+
+Both take `--link` (`-Link` on Windows) to link the extension to this checkout
+instead of copying it, so a change to the Lua side only needs an Aseprite
+restart.
 
 Restart Aseprite, then register the server with your MCP client:
 
@@ -43,3 +49,8 @@ Point each client's Streamable HTTP configuration at `http://127.0.0.1:8766/mcp`
 instead of launching separate stdio servers. Aseprite stays on bridge port
 `32145`. See [shared server setup](docs/SETUP.md#multiple-sessions-one-shared-http-server)
 for migration and shared-document behavior.
+
+To keep agents off each other's sprites, open one Aseprite window per agent.
+Every window connects to the shared server; each session picks its own with
+`select_instance` (by the id shown in **File > MCP Bridge...**, a name from
+`ASEPRITE_MCP_INSTANCE`, or a document it has open).

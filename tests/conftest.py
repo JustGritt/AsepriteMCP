@@ -45,7 +45,7 @@ def tiny_png(rgba: bytes = b"\x00\x00\x00\x00") -> bytes:
 class FakeAseprite:
     """Minimal stand-in for the Lua extension."""
 
-    def __init__(self) -> None:
+    def __init__(self, instance: str | None = None, name: str | None = None) -> None:
         self.requests: list[dict[str, Any]] = []
         self.responses: dict[str, Any] = {"fs.probe": {"canWriteFiles": True}}
         # What every render writes. Aseprite's PNGs are byte-identical for
@@ -57,6 +57,11 @@ class FakeAseprite:
             "apiVersion": 41,
             "capabilities": ["layer.uuid"],
         }
+        # Without an instance the hello is an older extension's, as before.
+        if instance is not None:
+            self.hello["instance"] = instance
+        if name is not None:
+            self.hello["instanceName"] = name
         self._task: asyncio.Task | None = None
         self._socket = None
         self.connected = asyncio.Event()

@@ -5,10 +5,13 @@ can dial out but cannot listen. So this process binds the socket and the
 extension connects to us, which is the reverse of the diagram in
 docs/ASEPRITE_MCP.md section 2.1. See docs/ARCHITECTURE.md.
 
-Only one Aseprite instance may be attached at a time (spec section 4 rules out
-multiple Aseprite processes). A newer connection wins and the previous one is
-closed, which is the behaviour you want when Aseprite is restarted and the stale
-socket has not timed out yet.
+Several Aseprite windows can be attached at once, each named by the instance id
+its extension sends in the hello (one per Aseprite process, stable across
+reconnects). Each MCP session picks the window it drives; see ToolContext and
+the select_instance tool. A window that reconnects under the same id replaces
+its old socket, which is what you want when the old one has not timed out yet.
+An extension too old to send an id is filed under one shared id, so among those
+the newest connection wins, as it always did.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
 from websockets.asyncio.server import ServerConnection, serve
@@ -40,18 +44,37 @@ HELLO_TIMEOUT = 10.0
 PORT_RETRY_SECONDS = 2.0
 
 
+# The id an extension without instance support is filed under.
+LEGACY_INSTANCE = "aseprite"
+
+
+@dataclass(eq=False)
+class Instance:
+    """One connected Aseprite window."""
+
+    id: str
+    name: str | None
+    websocket: ServerConnection = field(repr=False)
+    info: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def label(self) -> str:
+        return f"{self.name} ({self.id})" if self.name else self.id
+
+
 class AsepriteBridge:
-    """Owns the WebSocket server and the request/response correlation table."""
+    """Owns the WebSocket server, the connected windows, and the request table."""
 
     def __init__(self, config: Config):
         self._config = config
         self._server = None
-        self._client: ServerConnection | None = None
-        self._pending: dict[int, asyncio.Future] = {}
+        self._instances: dict[str, Instance] = {}
+        # request id -> (future, the socket the request went out on), so a
+        # window that disconnects fails its own calls and nobody else's.
+        self._pending: dict[int, tuple[asyncio.Future, ServerConnection]] = {}
         self._next_id = 0
         self._token = config.token or new_token()
         self._session: SessionFile | None = None
-        self.client_info: dict[str, Any] = {}
         self._bind_error: str | None = None
         self._acquire_task: asyncio.Task | None = None
 
@@ -127,10 +150,10 @@ class AsepriteBridge:
         self._fail_pending(
             BridgeError(ErrorCode.ASEPRITE_NOT_CONNECTED, "The MCP server is shutting down.")
         )
-        client, self._client = self._client, None
-        if client is not None:
+        instances, self._instances = list(self._instances.values()), {}
+        for instance in instances:
             try:
-                await client.close()
+                await instance.websocket.close()
             except (ConnectionClosed, OSError):
                 pass
         if self._server is not None:
@@ -157,7 +180,82 @@ class AsepriteBridge:
 
     @property
     def connected(self) -> bool:
-        return self._client is not None
+        return bool(self._instances)
+
+    @property
+    def instances(self) -> list[Instance]:
+        """Connected windows, oldest connection first."""
+        return list(self._instances.values())
+
+    @property
+    def client_info(self) -> dict[str, Any]:
+        """Version details of the most recently connected window, or {}."""
+        return self.instances[-1].info if self._instances else {}
+
+    def _labels(self) -> str:
+        return ", ".join(instance.label for instance in self._instances.values())
+
+    def _not_connected(self) -> BridgeError:
+        if self._bind_error:
+            # Sending the user to check their extension would waste their time:
+            # it is almost certainly connected, just to a different copy of this
+            # server. See start().
+            return BridgeError(
+                ErrorCode.ASEPRITE_NOT_CONNECTED,
+                f"{self._bind_error} Aseprite is attached to that process rather "
+                "than this one, so commands cannot reach it from here. Call "
+                "get_connection_status for how to fix it.",
+            )
+        return BridgeError(
+            ErrorCode.ASEPRITE_NOT_CONNECTED,
+            "No Aseprite extension is currently connected. Start Aseprite with the "
+            "aseprite-mcp extension installed and enabled, then try again.",
+        )
+
+    def resolve(self, selected: str | None) -> Instance:
+        """The window a call goes to.
+
+        The session's choice if it made one; otherwise the only window
+        connected. With several connected and no choice, refuse rather than
+        guess: a guess is an edit landing in another agent's sprite.
+        """
+        if not self._instances:
+            raise self._not_connected()
+        if selected is not None:
+            instance = self._instances.get(selected)
+            if instance is None:
+                raise BridgeError(
+                    ErrorCode.ASEPRITE_NOT_CONNECTED,
+                    f"The Aseprite window this session selected ({selected}) is not "
+                    f"connected. Connected now: {self._labels()}. Call select_instance "
+                    "to choose one.",
+                )
+            return instance
+        if len(self._instances) == 1:
+            return next(iter(self._instances.values()))
+        raise BridgeError(
+            ErrorCode.INSTANCE_REQUIRED,
+            f"{len(self._instances)} Aseprite windows are connected and this session has "
+            f"not chosen one: {self._labels()}. Call select_instance with one of them "
+            "(or pass aseprite_instance on each call if your client keeps no MCP "
+            "session); get_connection_status shows what each has open.",
+        )
+
+    def match(self, selector: str) -> Instance | None:
+        """A connected window by id, name, or unique id prefix; None if none match."""
+        if selector in self._instances:
+            return self._instances[selector]
+        by_name = [i for i in self._instances.values() if i.name == selector]
+        if len(by_name) == 1:
+            return by_name[0]
+        by_prefix = [i for i in self._instances.values() if i.id.startswith(selector)]
+        if len(by_name) > 1 or len(by_prefix) > 1:
+            raise BridgeError(
+                ErrorCode.INVALID_PARAMS,
+                f"{selector!r} matches more than one Aseprite window: {self._labels()}. "
+                "Use the id.",
+            )
+        return by_prefix[0] if by_prefix else None
 
     async def _reject(self, websocket: ServerConnection, reason: str, message: str) -> None:
         payload = {
@@ -200,20 +298,37 @@ class AsepriteBridge:
             await self._reject(websocket, "unauthorized", "Bad or missing token.")
             return
 
-        if self._client is not None:
-            log.warning("A second Aseprite instance connected; dropping the previous one.")
-            previous, self._client = self._client, None
+        instance_id = hello.get("instance")
+        if not isinstance(instance_id, str) or not instance_id:
+            instance_id = LEGACY_INSTANCE
+        name = hello.get("instanceName")
+        instance = Instance(
+            id=instance_id,
+            name=name if isinstance(name, str) and name else None,
+            websocket=websocket,
+            info={
+                "asepriteVersion": hello.get("asepriteVersion"),
+                "apiVersion": hello.get("apiVersion"),
+                "capabilities": hello.get("capabilities") or [],
+            },
+        )
+
+        previous = self._instances.pop(instance_id, None)
+        if previous is not None:
+            log.info("Aseprite %s reconnected; dropping its previous socket.", instance.label)
+            self._fail_pending(
+                BridgeError(
+                    ErrorCode.ASEPRITE_NOT_CONNECTED,
+                    "Aseprite reconnected before the command completed.",
+                ),
+                previous.websocket,
+            )
             try:
-                await previous.close(code=1000, reason="superseded")
+                await previous.websocket.close(code=1000, reason="superseded")
             except (ConnectionClosed, OSError):
                 pass
 
-        self._client = websocket
-        self.client_info = {
-            "asepriteVersion": hello.get("asepriteVersion"),
-            "apiVersion": hello.get("apiVersion"),
-            "capabilities": hello.get("capabilities") or [],
-        }
+        self._instances[instance_id] = instance
         await websocket.send(
             json.dumps(
                 {"type": "welcome", "ok": True, "protocolVersion": PROTOCOL_VERSION},
@@ -221,10 +336,11 @@ class AsepriteBridge:
             )
         )
         log.info(
-            "Aseprite connected: version=%s apiVersion=%s capabilities=%s",
-            self.client_info.get("asepriteVersion"),
-            self.client_info.get("apiVersion"),
-            self.client_info.get("capabilities"),
+            "Aseprite %s connected: version=%s apiVersion=%s capabilities=%s",
+            instance.label,
+            instance.info.get("asepriteVersion"),
+            instance.info.get("apiVersion"),
+            instance.info.get("capabilities"),
         )
 
         try:
@@ -233,16 +349,16 @@ class AsepriteBridge:
         except ConnectionClosed:
             pass
         finally:
-            if self._client is websocket:
-                self._client = None
-                self.client_info = {}
-                log.info("Aseprite disconnected.")
-                self._fail_pending(
-                    BridgeError(
-                        ErrorCode.ASEPRITE_NOT_CONNECTED,
-                        "Aseprite disconnected before the command completed.",
-                    )
-                )
+            if self._instances.get(instance_id) is instance:
+                del self._instances[instance_id]
+                log.info("Aseprite %s disconnected.", instance.label)
+            self._fail_pending(
+                BridgeError(
+                    ErrorCode.ASEPRITE_NOT_CONNECTED,
+                    "Aseprite disconnected before the command completed.",
+                ),
+                websocket,
+            )
 
     def _on_message(self, raw: str | bytes) -> None:
         try:
@@ -260,7 +376,8 @@ class AsepriteBridge:
                 log.debug("Unhandled message from Aseprite: %r", message)
             return
 
-        future = self._pending.pop(message_id, None)
+        entry = self._pending.pop(message_id, None)
+        future = entry[0] if entry else None
         if future is None:
             # Nearly always a response that arrived after its call timed out.
             log.debug("Response for unknown or expired request id %s.", message_id)
@@ -268,11 +385,13 @@ class AsepriteBridge:
         if not future.done():
             future.set_result(message)
 
-    def _fail_pending(self, error: BridgeError) -> None:
-        for future in list(self._pending.values()):
-            if not future.done():
-                future.set_exception(error)
-        self._pending.clear()
+    def _fail_pending(self, error: BridgeError, websocket: ServerConnection | None = None) -> None:
+        """Fail the calls waiting on one socket, or on every socket."""
+        for request_id, (future, sent_on) in list(self._pending.items()):
+            if websocket is None or sent_on is websocket:
+                del self._pending[request_id]
+                if not future.done():
+                    future.set_exception(error)
 
     # ------------------------------------------------------------------ requests
 
@@ -282,36 +401,22 @@ class AsepriteBridge:
         params: dict[str, Any] | None = None,
         *,
         timeout: float | None = None,
+        instance: str | None = None,
     ) -> dict[str, Any]:
-        """Send a command and await its response.
+        """Send a command to a window and await its response.
 
-        Returns the result object. Raises BridgeError for every failure mode,
-        including disconnection and timeout, so no caller has to tell transport
-        errors apart from Aseprite errors.
+        `instance` is the session's chosen window, if any; see resolve(). Returns
+        the result object. Raises BridgeError for every failure mode, including
+        disconnection and timeout, so no caller has to tell transport errors
+        apart from Aseprite errors.
         """
-        client = self._client
-        if client is None:
-            if self._bind_error:
-                # Sending the user to check their extension would waste their time:
-                # it is almost certainly connected, just to a different copy of
-                # this server. See start().
-                raise BridgeError(
-                    ErrorCode.ASEPRITE_NOT_CONNECTED,
-                    f"{self._bind_error} Aseprite is attached to that process rather "
-                    "than this one, so commands cannot reach it from here. Call "
-                    "get_connection_status for how to fix it.",
-                )
-            raise BridgeError(
-                ErrorCode.ASEPRITE_NOT_CONNECTED,
-                "No Aseprite extension is currently connected. Start Aseprite with the "
-                "aseprite-mcp extension installed and enabled, then try again.",
-            )
+        client = self.resolve(instance).websocket
 
         self._next_id += 1
         request_id = self._next_id
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
-        self._pending[request_id] = future
+        self._pending[request_id] = (future, client)
 
         try:
             await client.send(encode_request(request_id, command, params))

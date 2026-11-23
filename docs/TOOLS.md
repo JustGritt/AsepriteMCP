@@ -1,6 +1,6 @@
 # Tool reference
 
-41 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
+46 tools. Sizing follows spec section 2.3 (~20–40) and the rule that a tool earns
 its place only if it helps the agent understand, modify, inspect or safely
 preserve the sprite. The sheet tools take it one past that range, because nothing
 else gets a game's sprite sheet in as frames or back out as a PNG.
@@ -23,6 +23,11 @@ Conventions:
   (rejected when ambiguous).
 - **Colours** are `#RGB`, `#RGBA`, `#RRGGBB` or `#RRGGBBAA`, case-insensitive.
 - Tools taking `layer` / `frame` default to the active layer and frame.
+- **Windows.** Every call goes to one Aseprite window: the session's choice from
+  `select_instance`, or the only one connected. Any call also accepts
+  `aseprite_instance` (an id, name or id prefix) to name the window for that
+  call alone, for clients that keep no MCP session. It is in no schema: the
+  server strips it before validation.
 
 ---
 
@@ -33,6 +38,18 @@ Whether the extension is attached, which document is open, and whether Aseprite
 has granted file access. Answers even when nothing is connected — it is the tool
 you use to diagnose. Calling it triggers the file-access probe, so the Security
 dialog may appear here.
+
+`instance` is the window this session's calls go to. With several windows
+connected, `instances` lists each with its `id`, `name`, active `document`,
+open `documents` and `selected` flag; until the session chooses, the reply
+carries the `INSTANCE_REQUIRED` error instead of a document.
+
+### `select_instance(instance)`
+Chooses the Aseprite window this session drives, by its id, its name
+(`ASEPRITE_MCP_INSTANCE`), a unique id prefix, or the file name of a document it
+has open. The choice lasts for the session, as its legends and preview history
+do, and survives the window reconnecting. Ambiguous matches are refused with the
+candidates listed. See SETUP.md, "Multiple sessions".
 
 ---
 
@@ -321,6 +338,17 @@ per pixel, and readable positionally. `draw_rows` writes the same format back.
 `.` is transparent and a space is outside the canvas; neither is repeated in the
 legend. Capped at 4096 pixels.
 
+`by_layer=true` labels each pixel with the visible layer that shows there
+instead of its colour: the anatomy view of a rigged character, where the model
+cannot tell the arm from the torso by colour. Letters go to the bottom of the
+stack first, and names sharing an initial use their last word (`leg_far` f,
+`leg_near` n). It takes no `layer`.
+
+```json
+{"frame": 1, "source": "layers", "rows": [".HH.", ".hh.", "tttt", "f.n."],
+ "legend": {"H": "hat", "h": "head", "t": "torso", "f": "leg_far", "n": "leg_near"}}
+```
+
 ### `get_palette`
 Every palette entry as a positional list, so `colors[i]` is palette index `i`.
 Alpha appears only when it is not `ff`:
@@ -372,6 +400,51 @@ you pass.
 
 ---
 
+## Rig
+
+A rig animates a character as part layers posed from a rest frame, instead of
+editing the previous frame. [ANIMATION.md](ANIMATION.md#3-the-rig-implemented)
+has the design and a worked walk. All four are batchable.
+
+### `split_layer(layer, x, y, rows, parts, frame=None)`
+Moves pixels out of a flat drawing into part layers. `rows` is a label grid in
+the `draw_rows` format and `parts` maps each character to a layer name
+(created directly above the source, in the order given, when missing). `.`
+leaves a pixel where it is. The reply counts the pixels `moved` per layer, the
+opaque pixels `left` on the source, and any `labelledTransparent` labels with
+their first positions in `labelledTransparentAt`: a label on a transparent pixel
+almost always means a row is off by one.
+
+### `define_rig(parts, rest_frame=1, follows=None, outline=None)`
+`parts` are top-level image layers, bottom to top; missing ones are created and
+all are stacked together in that order. `follows={"hat": "head"}` makes a part
+move with its leader. `outline={"color", "parts", "floor"}` keeps an `outline`
+layer, under the parts, redrawn on every pose around the union of `parts`
+(default all) and never below row `floor`. Saved in the file, and reported by
+`get_sprite_info` as `rig`.
+
+### `pose_frame(frame, parts=None)`
+Builds one frame from the rest frame. `parts` maps a part to `[dx, dy]` or to
+`{dx, dy, frame, layer, recolor, hide}`: the drawing comes from `frame`
+(default the rest frame) on `layer` (default the part itself), moved, with
+`recolor={from: to}` exact swaps, or hidden. A follower's offset is relative to
+its leader.
+
+- Unlisted parts keep their pose. On a fresh frame, or a plain copy of the rest
+  frame, they take the rest pose.
+- A cel edited by hand since the rig wrote it is kept and listed in `kept`.
+  Drawing over a hidden part is how a new drawing is made: later poses can use
+  it as their source.
+- The reply has the parts `posed`, the outline pixel count (or `"kept"`), the
+  figure's `box`, and `detached`: parts that no longer touch any other part.
+
+### `refresh_rig(frames=None, force=False)`
+Rebuilds every posed cel from its saved recipe, sources first, then the
+outlines. Use it after changing the rest drawing or a drawing other frames
+reuse. Hand-edited cels are kept and listed unless `force`.
+
+---
+
 ## Batch
 
 ### `batch(ops, preview=False)`
@@ -418,7 +491,7 @@ frame used to cost one turn per step; a batch is one turn.
     nothing, like `No pixel matched that color.`
   - `paletteNotes` lists each palette note once, at most five.
 - `preview=true` appends a canvas preview of the last frame an op reported.
-- Batchable tools: the drawing, cel and frame tools, `select_layer`,
+- Batchable tools: the drawing, cel, frame and rig tools, `select_layer`,
   `create_layer`, `set_layer_visibility` and the tag tools. Previews, file
   access, `undo`/`redo` and `delete_layer` must be called directly.
 
@@ -452,6 +525,18 @@ get_animation_bounds + get_animation_contact_sheet  (once per animation pass;
         |                                            onion skin only for a
         v                                            specific motion question)
 save_sprite
+```
+
+For a character, the middle step is a rig rather than duplicated frames:
+
+```
+split_layer (flat art) or draw_rows per part layer, then define_rig    (once)
+        |
+        v
+batch([create_frame, pose_frame ..., draw_rows on a hidden part], preview=true)
+        |                                           (a new drawing only where
+        v                                            a move cannot express it)
+get_region(by_layer=true) for structure; refresh_rig after a rest change
 ```
 
 The server sends the same guidance as its `INSTRUCTIONS`. Every call re-reads

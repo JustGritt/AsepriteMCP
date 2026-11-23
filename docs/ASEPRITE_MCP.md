@@ -172,7 +172,8 @@ The initial version does NOT need:
 - complex selections
 - scripting arbitrary Lua
 - arbitrary CLI execution
-- integration with multiple Aseprite processes
+- integration with multiple Aseprite processes (since built: see ARCHITECTURE.md,
+  "Several windows, several sessions")
 - multi-user networking
 - cloud communication
 - remote WebSocket access
@@ -752,7 +753,9 @@ Agents using this MCP should follow the workflow below.
 > one `get_sprite_info` replaces the four listings, edits are grouped with
 > `batch`, exact checks use text (`get_region`, `compare_frames`,
 > `get_animation_bounds`), and previews are zoomed with `region` and taken once
-> per batch rather than after every edit. The original text is kept for history.
+> per batch rather than after every edit. Characters are animated with a rig:
+> frames are poses of a rest frame, not duplicates of the previous one (see
+> [ANIMATION.md](ANIMATION.md)). The original text is kept for history.
 
 ## Before editing
 

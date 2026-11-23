@@ -26,7 +26,13 @@ from tests.conftest import text_of, tiny_png
 # - new_sprite, ~560 bytes: without it an agent cannot start a sprite at all (#12).
 # - import_spritesheet and export_spritesheet, ~1 190 bytes: without them a game's
 #   sprite sheet cannot get in as frames or back out as a PNG.
-TOOL_LIST_BUDGET = 15_400
+# - the rig (split_layer, define_rig, pose_frame, refresh_rig, get_region
+#   by_layer), ~2 480 bytes: without it an agent animated each character through
+#   hundreds of lines of throwaway pixel scripts and full-frame draw_rows
+#   (docs/ANIMATION.md).
+# - select_instance, ~330 bytes: without it, two Aseprite windows on one server
+#   cannot be told apart and every call is refused (docs/SETUP.md).
+TOOL_LIST_BUDGET = 18_250
 
 
 def compact(value) -> int:

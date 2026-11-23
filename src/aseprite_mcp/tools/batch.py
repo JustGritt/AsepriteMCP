@@ -30,6 +30,7 @@ BATCHABLE = frozenset({
     "select_frame", "create_frame", "duplicate_frame", "delete_frame", "set_frame_duration",
     "select_layer", "create_layer", "set_layer_visibility",
     "create_animation_tag", "update_animation_tag", "delete_animation_tag",
+    "split_layer", "define_rig", "pose_frame", "refresh_rig",
 })
 
 

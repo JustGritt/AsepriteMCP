@@ -21,6 +21,19 @@ local PROTOCOL_VERSION = 1
 -- its own reconnect backoff; this only covers the case where it gave up.
 local RECONNECT_AFTER_SECONDS = 15
 
+--- Six hex characters naming this Aseprite process for as long as it runs.
+-- One server can hold several Aseprite windows, and each MCP session picks one
+-- by this id (or by ASEPRITE_MCP_INSTANCE, or by a document it has open). It
+-- survives reconnects, so a session's choice does too, and it differs between
+-- two copies of Aseprite started together: the table address varies with each
+-- process's memory layout, and the clocks with when and how long it has run.
+local function newInstanceId()
+  local seed = tostring({}) .. tostring(os.time()) .. tostring(os.clock())
+  local h = 2166136261
+  for i = 1, #seed do h = ((h ~ seed:byte(i)) * 16777619) & 0xffffffff end
+  return string.format("%06x", h & 0xffffff)
+end
+
 return function(deps)
   local queue = deps.queue
   local trace = deps.trace
@@ -34,6 +47,9 @@ return function(deps)
   -- setTarget and the reconnect that applies it.
   local target = nil
   local enabled = true
+  local instanceId = newInstanceId()
+  local instanceName = os.getenv and os.getenv("ASEPRITE_MCP_INSTANCE") or nil
+  if instanceName == "" then instanceName = nil end
 
   -- Precedence: explicit override (from plugin.preferences, set through the
   -- connect dialog), then the environment, then the built-in default. An empty
@@ -166,6 +182,8 @@ return function(deps)
       asepriteVersion = tostring(app.version),
       apiVersion = app.apiVersion,
       capabilities = capabilities,
+      instance = instanceId,
+      instanceName = instanceName,
     }))
   end
 
@@ -279,8 +297,12 @@ return function(deps)
       usingToken = resolved.token ~= "",
       lastError = lastError,
       lastAttempt = lastAttempt,
+      instance = instanceId,
+      instanceName = instanceName,
     }
   end
+
+  function M.instanceId() return instanceId end
 
   return M
 end

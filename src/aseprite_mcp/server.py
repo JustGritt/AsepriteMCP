@@ -23,9 +23,10 @@ from .tools import (
     history,
     inspection,
     layers,
+    rig,
     sprite,
 )
-from .tools.base import ToolContext, _recording
+from .tools.base import ToolContext, _instance_override, _recording
 from .usage import UsageLog
 
 log = logging.getLogger(__name__)
@@ -47,8 +48,13 @@ conversation and every image stays in it, so get there in few calls:
 - Draw shapes with draw_rows (the format get_region returns), runs with
   draw_line, blocks with draw_rect or fill. Keep draw_pixels for a few scattered
   pixels.
-- Build frames from earlier ones: duplicate_frame, then shift_cel, flip_cel,
-  copy_cel or replace_color, and redraw only what changed.
+- Animate a character with a rig: one layer per body part (split_layer cuts
+  up a flat drawing), define_rig once, then pose_frame builds each frame from
+  the rest frame, never from the last one. Draw a new part drawing on the frame
+  that first needs it and reuse it elsewhere by frame. refresh_rig after
+  changing the rest frame. get_region(by_layer=true) shows which part is where.
+- For other edits, build frames from earlier ones: duplicate_frame, then
+  shift_cel, flip_cel, copy_cel or replace_color, and redraw only what changed.
 - Group the edits for one step into a single batch, with preview=true when you
   need to see the result. A batch is one undo step.
 - Check exact facts with text: get_region for pixels, compare_frames for what
@@ -58,6 +64,9 @@ conversation and every image stays in it, so get there in few calls:
   get_onion_skin_preview only for a specific motion question.
 - Deterministic edits such as replace_color report what they changed and need no
   preview.
+- With several Aseprite windows connected, calls fail with INSTANCE_REQUIRED
+  until select_instance picks one for this session (by id, name or open
+  document). A client without MCP sessions passes aseprite_instance on each call.
 
 Reuse existing palette colors instead of introducing near-duplicates. Each call,
 or each whole batch, is one undo step.
@@ -96,6 +105,14 @@ def slim_schema(schema: Any) -> Any:
     return out
 
 
+# A per-call choice of Aseprite window, for clients that keep no MCP session
+# (the 2026-07-28 protocol is one self-contained POST per call, and stateless
+# calls get fresh memory). Stripped from the arguments before validation, so no
+# tool declares it and no schema pays for it; INSTRUCTIONS and the
+# INSTANCE_REQUIRED error say it exists.
+INSTANCE_ARGUMENT = "aseprite_instance"
+
+
 class AsepriteServer(MCPServer):
     """MCPServer with this project's tool defaults, applied in one place."""
 
@@ -122,6 +139,18 @@ class AsepriteServer(MCPServer):
         # Batch validation recursively calls tools while already holding the lock.
         if _recording.get() is not None:
             return await super().call_tool(name, arguments, context)
+        if INSTANCE_ARGUMENT in arguments:
+            arguments = dict(arguments)
+            chosen = arguments.pop(INSTANCE_ARGUMENT)
+            if chosen is not None:
+                token = _instance_override.set(str(chosen))
+                try:
+                    return await self._call_locked(name, arguments, context)
+                finally:
+                    _instance_override.reset(token)
+        return await self._call_locked(name, arguments, context)
+
+    async def _call_locked(self, name: str, arguments: dict[str, Any], context: Any):
         async with self._tool_lock:
             ctx = self._shared_context
             if ctx is None or context is None:
@@ -138,7 +167,8 @@ class AsepriteServer(MCPServer):
                 self._session_memory.move_to_end(session)
                 while len(self._session_memory) > 128:
                     self._session_memory.popitem(last=False)
-            fields = ("last_legend", "_image_labels", "_latest_image", "_skipped_images")
+            fields = ("last_legend", "_image_labels", "_latest_image", "_skipped_images",
+                      "instance")
             for field in fields:
                 setattr(ctx, field, getattr(memory, field))
             try:
@@ -197,7 +227,8 @@ def build_server(config: Config | None = None, *, shared: bool = False) -> tuple
         mcp._shared_context = ctx
 
     for module in (
-        connection, sprite, layers, frames, drawing, cels, inspection, animation, history, batch,
+        connection, sprite, layers, frames, drawing, cels, inspection, animation, history, rig,
+        batch,
     ):
         module.register(mcp, ctx)
 

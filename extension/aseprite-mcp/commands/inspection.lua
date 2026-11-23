@@ -11,7 +11,7 @@ local SYMBOLS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 return function(deps)
   local proto, doc, color, render = deps.proto, deps.doc, deps.color, deps.render
-  local fsio = deps.fsio
+  local fsio, rigstore = deps.fsio, deps.rigstore
   local M = {}
 
   local function writePng(image, outPath)
@@ -102,6 +102,107 @@ return function(deps)
     })
   end
 
+  --- Which visible layer shows at each pixel, as rows of characters.
+  -- The structure view: at 18 px the model cannot tell the arm from the torso
+  -- by color, but it can read a grid of part letters once each part is a layer.
+  local function layerRegion(sprite, frame, x0, y0, w, h)
+    local layers = {}
+    local function walk(list, parentVisible)
+      for i = #list, 1, -1 do
+        local layer = list[i]
+        local visible = parentVisible and layer.isVisible
+        if layer.isGroup then
+          walk(layer.layers, visible)
+        elseif visible and not layer.isTilemap then
+          local cel = layer:cel(frame)
+          if cel then layers[#layers + 1] = { layer = layer, cel = cel } end
+        end
+      end
+    end
+    walk(sprite.layers, true)
+
+    -- Which layer shows at each pixel, as an index into layers (top first).
+    local owners, present, clipped = {}, {}, false
+    for y = y0, y0 + h - 1 do
+      local row = {}
+      for x = x0, x0 + w - 1 do
+        local owner = false
+        if x < 0 or y < 0 or x >= sprite.width or y >= sprite.height then
+          clipped = true
+          owner = nil
+        else
+          for index, entry in ipairs(layers) do
+            local b = entry.cel.bounds
+            local lx, ly = x - b.x, y - b.y
+            if lx >= 0 and ly >= 0 and lx < b.width and ly < b.height
+              and rigstore.isOpaque(sprite, entry.cel.image:getPixel(lx, ly)) then
+              owner = index
+              present[index] = true
+              break
+            end
+          end
+        end
+        row[#row + 1] = owner
+      end
+      owners[#owners + 1] = row
+    end
+
+    -- Letters are given bottom of the stack first, so a body part gets its
+    -- own initial before what sits on it (head h, hat H). Names that share an
+    -- initial use their last word instead: leg_far f, leg_near n.
+    local initials = {}
+    for index in pairs(present) do
+      local c = layers[index].layer.name:sub(1, 1):lower()
+      initials[c] = (initials[c] or 0) + 1
+    end
+    local used, symbolOf, legend = {}, {}, {}
+    for index = #layers, 1, -1 do
+      if present[index] then
+        local name = layers[index].layer.name
+        local first = name:sub(1, 1):lower()
+        local last = name:match("[_%-%s]+(%w)%w*$")
+        local candidates = {}
+        if last and initials[first] > 1 then candidates[1] = last:lower() end
+        candidates[#candidates + 1] = first
+        candidates[#candidates + 1] = first:upper()
+        if last then candidates[#candidates + 1] = last:upper() end
+        for i = 2, #name do candidates[#candidates + 1] = name:sub(i, i):lower() end
+        for i = 1, #SYMBOLS do candidates[#candidates + 1] = SYMBOLS:sub(i, i) end
+        for _, c in ipairs(candidates) do
+          if c:match("%w") and not used[c] then
+            used[c] = true
+            symbolOf[index] = c
+            legend[c] = name
+            break
+          end
+        end
+      end
+    end
+
+    local rows = {}
+    for _, row in ipairs(owners) do
+      local chars = {}
+      for i = 1, w do
+        local owner = row[i]
+        if owner == nil then
+          chars[i] = " "
+        elseif owner == false then
+          chars[i] = "."
+        else
+          chars[i] = symbolOf[owner] or "?"
+        end
+      end
+      rows[#rows + 1] = table.concat(chars)
+    end
+    return {
+      frame = frame,
+      source = "layers",
+      rows = proto.array(rows),
+      legend = legend,
+      clippedToCanvas = clipped or nil,
+    }
+  end
+
   --- Exact pixel values as a character map plus a legend.
   -- Far more compact than one object per pixel, and easy to read positionally.
   M["inspect.region"] = function(params)
@@ -109,6 +210,14 @@ return function(deps)
     local frameNumber = doc.resolveFrame(sprite, params.frame)
     local x0, y0 = math.floor(params.x), math.floor(params.y)
     local w, h = math.floor(params.width), math.floor(params.height)
+
+    if params.byLayer then
+      if params.layer ~= nil then
+        proto.fail(proto.ERROR.INVALID_PARAMS,
+          "byLayer labels every visible layer, so it takes no layer.")
+      end
+      return layerRegion(sprite, frameNumber, x0, y0, w, h)
+    end
 
     local source, image
     if params.layer ~= nil then
