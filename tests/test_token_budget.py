@@ -36,7 +36,9 @@ from tests.conftest import text_of, tiny_png
 #   shares a body is animated again from scratch, pose by pose (#32).
 # - import_image, ~615 bytes: without it a reference image needed a throwaway
 #   script to shrink it and its own document to hold it (#23).
-TOOL_LIST_BUDGET = 19_700
+# - draw_rows repeat_at, ~195 bytes: without it a shape drawn at several spots
+#   was sent once per spot, rows and all (#22).
+TOOL_LIST_BUDGET = 19_900
 
 
 def compact(value) -> int:
