@@ -264,49 +264,34 @@ class TestContestedPort:
             await second.stop()
             await first.stop()
 
-    async def test_the_loser_takes_over_when_the_holder_exits(
+    async def test_the_next_call_takes_the_port_once_the_holder_exits(
         self, config, sandbox, tmp_path, monkeypatch
     ):
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
-        first = await self._bridge_on(0, sandbox)
-        await first.start()
-        port = first.bound_port
-
-        second = await self._bridge_on(port, sandbox)
-        await second.start()
-        assert second.bind_error is not None
-
-        await first.stop()
-        try:
-            assert await wait_for(lambda: second.bind_error is None, timeout=10.0), (
-                "the second bridge should acquire the port once the first releases it"
-            )
-            fake = FakeAseprite()
-            await fake.start(second.bound_port, second.token)
-            try:
-                assert await wait_for(lambda: second.connected), (
-                    "and then actually serve Aseprite"
-                )
-            finally:
-                await fake.stop()
-        finally:
-            await second.stop()
-
-    async def test_calls_explain_that_another_process_holds_the_bridge(
-        self, config, sandbox, tmp_path, monkeypatch
-    ):
+        """No background retry: the session that wants Aseprite is the one that gets it."""
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
         first = await self._bridge_on(0, sandbox)
         await first.start()
         second = await self._bridge_on(first.bound_port, sandbox)
-        await second.start()
         try:
             with pytest.raises(BridgeError) as caught:
                 await second.call("sprite.info")
             assert caught.value.code is ErrorCode.ASEPRITE_NOT_CONNECTED
             # Not the generic "start Aseprite" advice: the extension is fine, it
-            # is simply attached to the other process.
+            # is simply attached to the other process. Lead with the simple fix.
             assert "already listening" in str(caught.value)
+            assert "/mcp" in str(caught.value)
+            assert not second.listening
+
+            await first.stop()
+            call = asyncio.create_task(second.call("sprite.info"))
+            assert await wait_for(lambda: second.listening)
+            fake = FakeAseprite()
+            fake.reply("sprite.info", {"from": "second"})
+            await fake.start(second.bound_port, second.token)
+            try:
+                assert (await call)["from"] == "second"
+            finally:
+                await fake.stop()
         finally:
             await second.stop()
             await first.stop()
@@ -518,3 +503,80 @@ class TestHeartbeat:
                              if t.get_name().startswith("heartbeat ")]) == 1
             ), "one window, one heartbeat"
             assert json.loads(await asyncio.wait_for(new.recv(), 1.0)) == {"type": "heartbeat"}
+
+
+class TestOnDemandBinding:
+    """A stdio server binds on its first command, not at startup (#19)."""
+
+    @pytest.fixture
+    def bridge(self, config, tmp_path, monkeypatch):
+        from aseprite_mcp.bridge.ws_server import AsepriteBridge
+
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+        return AsepriteBridge(config)
+
+    async def test_a_session_that_makes_no_call_holds_no_port(self, config, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+        from aseprite_mcp.server import build_server
+
+        mcp, ctx = build_server(config)
+        async with mcp.settings.lifespan(mcp):
+            assert not ctx.bridge.listening
+            status = json.loads((await mcp.call_tool("get_connection_status", {})).content[0].text)
+            assert status["listening"] is False and status["connected"] is False
+            assert not ctx.bridge.listening, "the diagnostic must not bind"
+
+    async def test_the_first_call_binds_and_waits_for_aseprite(self, bridge):
+        call = asyncio.create_task(bridge.call("sprite.info"))
+        assert await wait_for(lambda: bridge.listening)
+        fake = FakeAseprite()
+        fake.reply("sprite.info", {"width": 8})
+        await fake.start(bridge.bound_port, bridge.token)
+        try:
+            assert (await call)["width"] == 8
+        finally:
+            await fake.stop()
+            await bridge.stop()
+
+    async def test_the_wait_ends_when_nothing_attaches(self, bridge, monkeypatch):
+        from aseprite_mcp.bridge import ws_server
+
+        monkeypatch.setattr(ws_server, "CONNECT_WAIT_SECONDS", 0.1)
+        try:
+            with pytest.raises(BridgeError) as caught:
+                await bridge.call("sprite.info")
+            assert caught.value.code is ErrorCode.ASEPRITE_NOT_CONNECTED
+            assert bridge.listening, "it keeps listening for Aseprite"
+        finally:
+            await bridge.stop()
+
+    async def test_an_idle_port_is_released_and_taken_again(self, bridge, monkeypatch):
+        from aseprite_mcp.bridge import ws_server
+
+        monkeypatch.setattr(ws_server, "CONNECT_WAIT_SECONDS", 0.1)
+        monkeypatch.setattr(ws_server, "IDLE_RELEASE_SECONDS", 0.5)
+        try:
+            with pytest.raises(BridgeError):
+                await bridge.call("sprite.info")
+            assert bridge.listening
+            await asyncio.sleep(0.3)
+            with pytest.raises(BridgeError):
+                await bridge.call("sprite.info")
+            await asyncio.sleep(0.3)
+            assert bridge.listening, "each command restarts the idle count"
+            assert await wait_for(lambda: not bridge.listening)
+            assert not session_file_path().exists()
+            with pytest.raises(BridgeError):
+                await bridge.call("sprite.info")
+            assert bridge.listening, "the next command binds again"
+        finally:
+            await bridge.stop()
+
+    async def test_a_port_opened_by_start_is_never_released(self, server, aseprite, monkeypatch):
+        from aseprite_mcp.bridge import ws_server
+
+        _mcp, ctx = server
+        monkeypatch.setattr(ws_server, "IDLE_RELEASE_SECONDS", 0.05)
+        await ctx.bridge.call("sprite.info")
+        await asyncio.sleep(0.2)
+        assert ctx.bridge.listening and ctx.bridge.connected

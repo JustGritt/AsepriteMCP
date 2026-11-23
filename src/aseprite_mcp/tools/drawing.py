@@ -155,7 +155,8 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             "Write pixels as rows of characters, the format get_region returns. Row 0 lands "
             "at y, column 0 at x. legend maps each character to a hex color or palette "
             "index; omit it to reuse the last one. '.' is transparent: blank='skip' leaves "
-            "it, blank='erase' clears it. ' ' is always skipped."
+            "it, blank='erase' clears it. ' ' is always skipped. repeat_at=[[x, y], ...] "
+            "stamps the same rows at more origins."
         ),
     )
     async def draw_rows(
@@ -166,6 +167,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         blank: Literal["skip", "erase"] = "skip",
         layer: str | None = None,
         frame: int | None = None,
+        repeat_at: list[tuple[int, int]] | None = None,
     ) -> str:
         reused = legend is None
         if reused:
@@ -177,14 +179,15 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             legend = ctx.last_legend
         resolved = _resolve_legend(legend)
 
-        encoded: list[dict[str, Any]] = []
+        # Relative to the origin, so the shape can be stamped at every repeat_at.
+        shape: list[dict[str, Any]] = []
         for row_index, row in enumerate(rows):
             for col, char in enumerate(row):
                 if char == OUTSIDE:
                     continue
                 if char == TRANSPARENT:
                     if blank == "erase":
-                        encoded.append({"x": x + col, "y": y + row_index, "erase": True})
+                        shape.append({"x": col, "y": row_index, "erase": True})
                     continue
                 spec = resolved.get(char)
                 if spec is None:
@@ -193,14 +196,20 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
                         f"rows[{row_index}][{col}] is {char!r}, which is not in the legend "
                         f"({''.join(sorted(resolved))}).",
                     )
-                encoded.append({"x": x + col, "y": y + row_index, **spec})
+                shape.append({"x": col, "y": row_index, **spec})
 
-        if not encoded:
+        if not shape:
             raise BridgeError(
                 ErrorCode.INVALID_PARAMS,
                 "rows hold nothing to draw: every character is '.' or ' '. "
                 "Pass blank='erase' to clear the '.' pixels.",
             )
+        # One draw.pixels for every stamp: one undo step, and the cap covers the total.
+        encoded = [
+            {**pixel, "x": ox + pixel["x"], "y": oy + pixel["y"]}
+            for ox, oy in [(x, y), *(repeat_at or ())]
+            for pixel in shape
+        ]
         _check_batch(len(encoded))
         ctx.last_legend = legend
 

@@ -50,6 +50,10 @@ connected, `instances` lists each with its `id`, `name`, active `document`,
 open `documents` and `selected` flag; until the session chooses, the reply
 carries the `INSTANCE_REQUIRED` error instead of a document.
 
+It never opens the bridge port itself. Before the first Aseprite command it
+reports `listening: false`; when another server holds the port, it reports
+`bridgePortOwnedElsewhere` with the fix in `hint`.
+
 ### `select_instance(instance)`
 Chooses the Aseprite window this session drives, by its id, its name
 (`ASEPRITE_MCP_INSTANCE`), a unique id prefix, or the file name of a document it
@@ -232,7 +236,7 @@ The model writes tool arguments as output tokens, the most expensive kind, so
 choose the encoding by density. A 32×32 sprite with 540 opaque pixels takes
 18 136 bytes as `draw_pixels` and 1 209 as `draw_rows`.
 
-### `draw_rows(x, y, rows, legend=None, blank="skip", layer=None, frame=None)`
+### `draw_rows(x, y, rows, legend=None, blank="skip", layer=None, frame=None, repeat_at=None)`
 Pixels as a character map: the same format `get_region` returns, so you can read a
 region, edit the map and write it back. Row 0 lands at `y`, column 0 at `x`.
 
@@ -257,6 +261,11 @@ region, edit the map and write it back. Row 0 lands at `y`, column 0 at `x`.
   short on purpose in skip mode, so they stay quiet. A solid shape that really is
   uneven, like a stepped edge, gets the warning anyway and can ignore it.
 - Inside a `batch`, these warnings reach the reply's `warnings` with the op's index.
+- `repeat_at=[[x, y], ...]` stamps the same rows at more origins, after the one at
+  `x, y`: a forest of one tree design costs one tree's rows. It is still one
+  `draw.pixels` and one undo step, the pixel cap counts every stamp, and the reply
+  gives the total `written` and one `changed` box around all of them. Later stamps
+  draw over earlier ones where they overlap.
 
 ### `draw_rect(x, y, width, height, color, filled=True, layer=None, frame=None)`
 A filled rectangle, or a 1px outline with `filled=false`.

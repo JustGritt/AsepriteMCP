@@ -619,6 +619,35 @@ class TestDrawRows:
         )
         assert not aseprite.requests
 
+    async def test_repeat_at_stamps_the_shape_in_one_command(self, server, aseprite):
+        mcp, _ = server
+        await ok(mcp, "draw_rows", x=0, y=0, rows=["a."], legend={"a": "#fff"}, blank="erase",
+                 repeat_at=[[10, 5], [-1, 2]])
+        assert [r["command"] for r in aseprite.requests] == ["draw.pixels"]
+        assert [(p["x"], p["y"], "erase" in p) for p in aseprite.last()["params"]["pixels"]] == [
+            (0, 0, False), (1, 0, True), (10, 5, False), (11, 5, True), (-1, 2, False), (0, 2, True),
+        ]
+
+    async def test_repeat_at_counts_every_stamp_against_the_cap(self, server, aseprite, config):
+        mcp, _ = server
+        rows = ["a" * 100] * (config.max_pixels_per_call // 200)
+        assert "TOO_MANY_PIXELS" in await err(
+            mcp, "draw_rows", x=0, y=0, rows=rows, legend={"a": "#fff"}, repeat_at=[[0, 0], [1, 1]]
+        )
+        assert not aseprite.requests
+
+    async def test_repeat_at_takes_pairs(self, server, aseprite):
+        mcp, _ = server
+        await err(mcp, "draw_rows", x=0, y=0, rows=["a"], legend={"a": "#fff"}, repeat_at=[[1]])
+        assert not aseprite.requests
+
+    async def test_repeat_at_inside_a_batch(self, server, aseprite):
+        mcp, _ = server
+        await ok(mcp, "batch", ops=[{"tool": "draw_rows", "args": {
+            "x": 0, "y": 0, "rows": ["a"], "legend": {"a": "#fff"}, "repeat_at": [[3, 3]]}}])
+        [op] = aseprite.last("batch.run")["params"]["ops"]
+        assert [(p["x"], p["y"]) for p in op["params"]["pixels"]] == [(0, 0), (3, 3)]
+
 
 class TestDrawRect:
     async def test_filled(self, server, aseprite):
