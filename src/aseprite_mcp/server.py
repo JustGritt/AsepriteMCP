@@ -23,6 +23,7 @@ from .tools import (
     history,
     inspection,
     layers,
+    rig,
     sprite,
 )
 from .tools.base import ToolContext, _recording
@@ -47,8 +48,13 @@ conversation and every image stays in it, so get there in few calls:
 - Draw shapes with draw_rows (the format get_region returns), runs with
   draw_line, blocks with draw_rect or fill. Keep draw_pixels for a few scattered
   pixels.
-- Build frames from earlier ones: duplicate_frame, then shift_cel, flip_cel,
-  copy_cel or replace_color, and redraw only what changed.
+- Animate a character with a rig: one layer per body part (split_layer cuts
+  up a flat drawing), define_rig once, then pose_frame builds each frame from
+  the rest frame, never from the last one. Draw a new part drawing on the frame
+  that first needs it and reuse it elsewhere by frame. refresh_rig after
+  changing the rest frame. get_region(by_layer=true) shows which part is where.
+- For other edits, build frames from earlier ones: duplicate_frame, then
+  shift_cel, flip_cel, copy_cel or replace_color, and redraw only what changed.
 - Group the edits for one step into a single batch, with preview=true when you
   need to see the result. A batch is one undo step.
 - Check exact facts with text: get_region for pixels, compare_frames for what
@@ -197,7 +203,8 @@ def build_server(config: Config | None = None, *, shared: bool = False) -> tuple
         mcp._shared_context = ctx
 
     for module in (
-        connection, sprite, layers, frames, drawing, cels, inspection, animation, history, batch,
+        connection, sprite, layers, frames, drawing, cels, inspection, animation, history, rig,
+        batch,
     ):
         module.register(mcp, ctx)
 

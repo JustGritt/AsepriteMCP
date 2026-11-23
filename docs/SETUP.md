@@ -20,8 +20,15 @@ uv run pytest          # 205 tests, no Aseprite needed
 powershell -ExecutionPolicy Bypass -File scripts/install-extension.ps1
 ```
 
-Pass `-Link` to install a junction instead of a copy, so edits in the repo take
-effect on the next Aseprite restart. Pass `-Uninstall` to remove it.
+On macOS and Linux:
+
+```sh
+scripts/install-extension.sh
+```
+
+Pass `-Link` (`--link`) to install a junction or symlink instead of a copy, so
+edits in the repo take effect on the next Aseprite restart. Pass `-Uninstall`
+(`--uninstall`) to remove it.
 
 To install by hand instead: zip the contents of `extension/aseprite-mcp` as
 `aseprite-mcp.aseprite-extension` and use **Edit > Preferences > Extensions >
@@ -247,9 +254,10 @@ switched off. Open **File > MCP Bridge...**: it reports the address it
 is dialling, whether anything is listening there, and the last error.
 
 **The dialog flickers between Connected and Connecting**
-Two copies of Aseprite are running. Only one may be attached, and the server
-closes the older connection whenever a newer one arrives — so two instances take
-turns forever. Close one.
+Two copies of Aseprite are dialling the same port. Only one may be attached, and
+the server closes the older connection whenever a newer one arrives — so two
+instances take turns forever. Close one, or give each its own port and server:
+see "Several sessions at once" in the [README](../README.md).
 
 **`TIMEOUT` on the first preview or open**
 Almost always the Security dialog waiting for a click. Switch to Aseprite and

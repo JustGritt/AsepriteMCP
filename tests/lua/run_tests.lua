@@ -1441,6 +1441,311 @@ test("unknown command is rejected by name", function()
   check(dispatch["does.not.exist"] == nil, "unknown command is absent from the dispatch table")
 end)
 
+print("=== rig ===")
+
+local SKIN, OLIVE, BOOT, SHADE, GOLD, INK =
+  "#e3b98fff", "#8c9657ff", "#6b5a44ff", "#4d4032ff", "#e6b84aff", "#20222cff"
+
+--- The hex color of one pixel of one layer, or nil where it is transparent.
+local function px(sprite, layerName, frame, x, y)
+  local layer = doc.resolveLayer(sprite, layerName)
+  local cel = layer:cel(frame)
+  if not cel then return nil end
+  local lx, ly = x - cel.position.x, y - cel.position.y
+  if lx < 0 or ly < 0 or lx >= cel.image.width or ly >= cel.image.height then return nil end
+  local value = cel.image:getPixel(lx, ly)
+  if app.pixelColor.rgbaA(value) == 0 then return nil end
+  return core.color.pixelToHex(sprite, value)
+end
+
+local FIGURE = { ".hh.", ".hh.", "tttt", "tttt", "tttt", "tttt", "f.n.", "f.n.", "f.n." }
+local LABELS = { { "h", "head" }, { "t", "torso" }, { "n", "leg_near" }, { "f", "leg_far" } }
+
+--- A 16x16 figure on one `body` layer: a head, a torso and two legs, at x 5-8,
+-- y 2-10, with a hat on its own layer. Split into parts unless told not to.
+local function figure(split)
+  local sprite = newSprite(16, 16)
+  sprite.layers[1].name = "body"
+  local pixels = {}
+  local colors = { h = SKIN, t = OLIVE, n = BOOT, f = SHADE }
+  for j, row in ipairs(FIGURE) do
+    for i = 1, #row do
+      local c = row:sub(i, i)
+      if c ~= "." then pixels[#pixels + 1] = { x = 4 + i, y = 1 + j, color = colors[c] } end
+    end
+  end
+  call("draw.pixels", { layer = "body", pixels = pixels })
+  call("layer.create", { name = "hat" })
+  call("draw.pixels", { layer = "hat", pixels = {
+    { x = 6, y = 1, color = GOLD }, { x = 7, y = 1, color = GOLD } } })
+  if split ~= false then
+    call("cel.split", { layer = "body", x = 5, y = 2, rows = FIGURE, parts = LABELS })
+  end
+  return sprite
+end
+
+local function rigged(outline)
+  local sprite = figure()
+  call("rig.define", {
+    parts = { "leg_far", "torso", "leg_near", "head", "hat" },
+    follows = { hat = "head" },
+    outline = outline,
+  })
+  call("frame.create", {})
+  call("frame.create", {})
+  return sprite
+end
+
+local function stackNames(sprite)
+  local names = {}
+  for i, layer in ipairs(sprite.layers) do names[i] = layer.name end
+  return table.concat(names, ",")
+end
+
+test("cel.split moves labelled pixels into new layers above the source", function()
+  local sprite = figure(false)
+  local result = call("cel.split", { layer = "body", x = 5, y = 2, rows = FIGURE, parts = LABELS })
+  equals(result.moved.head, 4, "head pixels moved")
+  equals(result.moved.torso, 16, "torso pixels moved")
+  equals(result.left, 0, "nothing left on body")
+  equals(#result.created, 4, "four layers created")
+  equals(stackNames(sprite), "body,head,torso,leg_near,leg_far,hat",
+    "created directly above the source, in the order listed")
+  equals(px(sprite, "leg_near", 1, 7, 9), BOOT, "a leg pixel landed on its layer")
+  equals(px(sprite, "body", 1, 7, 9), nil, "and left the source")
+
+  local again = call("cel.split", { layer = "torso", x = 5, y = 4, rows = { "x..." },
+    parts = { { "x", "arm" } } })
+  equals(again.moved.arm, 1, "an existing part can be split further")
+  local miss = call("cel.split", { layer = "torso", x = 0, y = 0, rows = { "x" },
+    parts = { { "x", "arm" } } })
+  equals(miss.labelledTransparent, 1, "a label on a transparent pixel is counted")
+  equals(miss.labelledTransparentAt[1][1], 0, "and located")
+  expectError("cel.split", { layer = "torso", x = 5, y = 5, rows = { "q" },
+    parts = { { "x", "arm" } } }, "INVALID_PARAMS", "an unmapped character")
+  expectError("cel.split", { layer = "torso", x = 5, y = 5, rows = { "x" },
+    parts = { { "x", "torso" } } }, "INVALID_PARAMS", "splitting a layer into itself")
+  sprite:close()
+end)
+
+test("rig.define stacks the parts, creates the missing ones and is stored", function()
+  local sprite = figure()
+  local result = call("rig.define", {
+    parts = { "leg_far", "torso", "leg_near", "head", "cape", "hat" },
+    follows = { hat = "head" },
+    outline = { color = INK, parts = { "leg_far", "torso", "leg_near", "head" } },
+  })
+  equals(result.rest, 1, "rest frame defaults to 1")
+  equals(result.created[1], "outline", "outline layer created")
+  equals(result.created[2], "cape", "missing part created")
+  equals(result.outline, INK, "outline color reported")
+  check(type(result.restOutline) == "number" and result.restOutline > 0, "rest outline drawn")
+  equals(stackNames(sprite), "body,outline,leg_far,torso,leg_near,head,cape,hat",
+    "contiguous, bottom to top, outline lowest")
+  local info = call("sprite.info")
+  equals(info.rig.rest, 1, "sprite.info reports the rig")
+  equals(info.rig.follows.hat, "head", "with its followers")
+  equals(#info.rig.parts, 6, "and its parts")
+
+  expectError("rig.define", { parts = { "head", "head" } }, "INVALID_PARAMS", "duplicate part")
+  expectError("rig.define", { parts = { "head" }, follows = { hat = "head" } }, "INVALID_PARAMS",
+    "a follower outside parts")
+  expectError("rig.define", { parts = { "head", "hat" }, follows = { hat = "head", head = "hat" } },
+    "INVALID_PARAMS", "follows loops")
+  expectError("rig.define", { parts = { "head" }, outline = { color = INK, parts = { "torso" } } },
+    "INVALID_PARAMS", "outline part outside parts")
+  sprite:close()
+end)
+
+test("rig.pose builds from the rest frame, not the previous pose", function()
+  local sprite = rigged()
+  local first = call("rig.pose", { frame = 2, parts = { torso = { dy = 1 } } })
+  equals(first.frame, 2, "posed frame reported")
+  equals(#first.posed, 5, "every part placed on a fresh frame")
+  call("rig.pose", { frame = 2, parts = { torso = { dy = 1 } } })
+  equals(doc.resolveLayer(sprite, "torso"):cel(2).position.y, 5, "the same pose twice moves once")
+  equals(px(sprite, "head", 2, 6, 2), SKIN, "unlisted parts sit at rest")
+
+  local again = call("rig.pose", { frame = 2, parts = { head = { dx = 1 } } })
+  equals(doc.resolveLayer(sprite, "torso"):cel(2).position.y, 5, "a listed-only update keeps the torso")
+  equals(#again.posed, 2, "only the head and its follower were rewritten")
+  equals(px(sprite, "hat", 2, 8, 1), GOLD, "the hat followed the head")
+
+  call("rig.pose", { frame = 2, parts = { head = { dx = 2 } } })
+  equals(px(sprite, "hat", 2, 9, 1), GOLD, "and follows it again when the head moves on")
+  call("rig.pose", { frame = 2, parts = { hat = { dy = -1 } } })
+  equals(px(sprite, "hat", 2, 9, 0), GOLD, "a follower's own offset is relative to its leader")
+
+  expectError("rig.pose", { frame = 1, parts = {} }, "INVALID_FRAME", "the rest frame cannot be posed")
+  expectError("rig.pose", { frame = 2, parts = { tail = { dx = 1 } } }, "INVALID_PARAMS", "unknown part")
+  expectError("rig.pose", { frame = 2, parts = { head = { frame = 2 } } }, "INVALID_PARAMS",
+    "a part cannot copy itself")
+  sprite:close()
+end)
+
+test("rig.pose takes drawings from other frames and parts, recolored", function()
+  local sprite = rigged()
+  -- A new leg drawing on frame 2, drawn by hand: the passing leg.
+  call("rig.pose", { frame = 2, parts = { leg_near = { hide = true } } })
+  call("draw.pixels", { layer = "leg_near", frame = 2, pixels = {
+    { x = 6, y = 8, color = BOOT }, { x = 6, y = 9, color = BOOT } } })
+  local result = call("rig.pose", { frame = 3, parts = {
+    leg_far = { frame = 2, layer = "leg_near", recolor = { [BOOT] = SHADE }, dx = -1 },
+    leg_near = { frame = 2 },
+  } })
+  equals(px(sprite, "leg_far", 3, 5, 9), SHADE, "the far leg took the near leg's drawing, recolored")
+  equals(px(sprite, "leg_near", 3, 6, 9), BOOT, "the near leg reused frame 2's drawing")
+  equals(result.kept, nil, "nothing was kept on a fresh frame")
+
+  local repose = call("rig.pose", { frame = 2, parts = { torso = { dy = 1 } } })
+  equals(repose.kept[1], "leg_near", "a hand-drawn part is kept when the frame is re-posed")
+  equals(px(sprite, "leg_near", 2, 6, 8), BOOT, "with its pixels intact")
+  local refreshed = call("rig.refresh", { force = true })
+  equals(refreshed.kept, nil, "a drawing made over a hidden part is a source, not an edit")
+  equals(px(sprite, "leg_near", 2, 6, 8), BOOT, "and even force leaves it alone")
+  equals(px(sprite, "leg_far", 3, 5, 9), SHADE, "while the frame built from it is rebuilt")
+  sprite:close()
+end)
+
+test("hidden parts stay hidden and duplicated frames start at rest", function()
+  local sprite = rigged()
+  call("rig.pose", { frame = 2, parts = { leg_far = { hide = true }, torso = { dy = 1 } } })
+  call("rig.pose", { frame = 2, parts = { head = { dy = 1 } } })
+  equals(px(sprite, "leg_far", 2, 5, 9), nil, "still hidden after another pose")
+  call("frame.duplicate", { frame = 1 })
+  local fresh = call("rig.pose", { frame = 2, parts = { torso = { dy = 1 } } })
+  equals(fresh.kept, nil, "copies of the rest frame are not mistaken for hand edits")
+  equals(px(sprite, "hat", 2, 6, 1), GOLD, "and take the rest pose")
+  sprite:close()
+end)
+
+test("rig.refresh rebuilds every pose after the rest drawing changes", function()
+  local sprite = rigged()
+  call("rig.pose", { frame = 2, parts = { torso = { dy = 1 } } })
+  call("rig.pose", { frame = 3, parts = { torso = { frame = 2, dx = 1 } } })
+  call("draw.pixels", { layer = "torso", frame = 1, pixels = { { x = 5, y = 4, color = GOLD } } })
+  local result = call("rig.refresh", {})
+  check(result.updated >= 2, "posed cels were rebuilt: " .. tostring(result.updated))
+  equals(px(sprite, "torso", 2, 5, 5), GOLD, "frame 2 shows the new rest drawing, still lowered")
+  equals(px(sprite, "torso", 3, 6, 5), GOLD, "frame 3, chained through frame 2, too")
+
+  call("draw.pixels", { layer = "head", frame = 2, pixels = { { x = 8, y = 2, color = INK } } })
+  call("draw.pixels", { layer = "head", frame = 1, pixels = { { x = 6, y = 2, color = GOLD } } })
+  local kept = call("rig.refresh", {})
+  equals(kept.kept[1], "head@2", "a hand-edited posed cel is reported and kept")
+  equals(px(sprite, "head", 2, 8, 2), INK, "its edit survives")
+  call("rig.refresh", { force = true })
+  equals(px(sprite, "head", 2, 8, 2), nil, "force rebuilds it from its recipe")
+  equals(px(sprite, "head", 2, 6, 2), GOLD, "from the current rest drawing")
+  sprite:close()
+end)
+
+test("the outline is redrawn around the silhouette on each pose", function()
+  local sprite = rigged({ color = INK, parts = { "leg_far", "torso", "leg_near", "head" }, floor = 10 })
+  equals(px(sprite, "outline", 1, 4, 5), INK, "left of the torso")
+  equals(px(sprite, "outline", 1, 6, 1), INK, "above the head, under the hat")
+  equals(px(sprite, "outline", 1, 5, 11), nil, "nothing below the floor")
+  local result = call("rig.pose", { frame = 2, parts = { torso = { dx = -1 } } })
+  check(type(result.outline) == "number" and result.outline > 0, "outline count reported")
+  equals(px(sprite, "outline", 2, 3, 5), INK, "the outline moved with the torso")
+  equals(px(sprite, "outline", 2, 4, 5), nil, "and left no ink inside the figure")
+
+  call("draw.pixels", { layer = "outline", frame = 2, pixels = { { x = 0, y = 0, color = INK } } })
+  local again = call("rig.pose", { frame = 2, parts = { torso = { dx = 0 } } })
+  equals(again.outline, "kept", "a hand-edited outline is kept")
+  sprite:close()
+end)
+
+test("a hand-drawn outline identical to the generated one is adopted", function()
+  local sprite = figure()
+  -- Draw the outline by hand first, exactly as the rig would.
+  call("rig.define", { parts = { "leg_far", "torso", "leg_near", "head" },
+    outline = { color = INK } })
+  local generated = {}
+  for y = 0, 15 do for x = 0, 15 do
+    if px(sprite, "outline", 1, x, y) then generated[#generated + 1] = { x = x, y = y, color = INK } end
+  end end
+  call("draw.clearCel", { layer = "outline", frame = 1 })
+  call("draw.pixels", { layer = "outline", frame = 1, pixels = generated })
+  local adopted = call("rig.refresh", {})
+  equals(adopted.outlinesKept, nil, "an identical hand outline is adopted, not reported")
+  call("draw.pixels", { layer = "outline", frame = 1, pixels = { { x = 0, y = 0, color = INK } } })
+  equals(call("rig.refresh", {}).outlinesKept[1], 1, "a different one is kept and reported")
+  sprite:close()
+end)
+
+test("rig.pose reports the box and parts that came apart", function()
+  local sprite = rigged()
+  local result = call("rig.pose", { frame = 2, parts = { leg_near = { dx = 5 } } })
+  equals(result.detached[1], "leg_near", "a leg moved off the body is detached")
+  equals(result.box[1], 5, "box left")
+  equals(result.box[2], 1, "box top, the hat included")
+  local attached = call("rig.pose", { frame = 3, parts = { torso = { dy = 1 } } })
+  equals(attached.detached, nil, "overlapping parts are attached")
+  sprite:close()
+end)
+
+test("frame inserts and deletes renumber the rig", function()
+  local sprite = rigged()
+  call("rig.pose", { frame = 3, parts = { torso = { frame = 2 } } })
+  call("frame.create", { after = 1 })
+  local rec = doc.resolveLayer(sprite, "torso"):cel(4).properties("aseprite-mcp").pose
+  equals(rec.src, 3, "the source frame moved with the insert")
+  call("frame.delete", { frame = 2 })
+  rec = doc.resolveLayer(sprite, "torso"):cel(3).properties("aseprite-mcp").pose
+  equals(rec.src, 2, "and back with the delete")
+  call("frame.delete", { frame = 1 })
+  equals(call("sprite.info").rig.rest, 0, "deleting the rest frame clears it")
+  expectError("rig.pose", { frame = 1, parts = {} }, "INVALID_FRAME",
+    "and posing asks for define_rig again")
+  sprite:close()
+end)
+
+test("inspect.region byLayer labels the anatomy", function()
+  local sprite = rigged()
+  local region = call("inspect.region", { x = 5, y = 1, width = 4, height = 10, frame = 1,
+    byLayer = true })
+  equals(region.source, "layers", "labelled by layer")
+  equals(region.rows[1], ".HH.", "the hat shows over the head")
+  equals(region.rows[2], ".hh.", "head")
+  equals(region.rows[4], "tttt", "torso")
+  equals(region.rows[8], "f.n.", "far and near legs, by their last word")
+  equals(region.legend.n, "leg_near", "legend names the layers")
+  equals(region.legend.H, "hat", "the higher of two initials takes the capital")
+  expectError("inspect.region", { x = 0, y = 0, width = 1, height = 1, byLayer = true,
+    layer = "head" }, "INVALID_PARAMS", "byLayer takes no layer")
+  sprite:close()
+end)
+
+test("a walk in one batch is one undo step", function()
+  local sprite = rigged()
+  call("batch.run", { ops = {
+    { command = "frame.create", params = {} },
+    { command = "rig.pose", params = { frame = 2, parts = { torso = { dy = 1 }, head = { dy = 1 } } } },
+    { command = "rig.pose", params = { frame = 4, parts = { leg_near = { dx = 1 } } } },
+  } })
+  equals(#sprite.frames, 4, "frame created inside the batch")
+  equals(px(sprite, "hat", 2, 6, 2), GOLD, "hat followed inside the batch")
+  call("history.undo", {})
+  equals(#sprite.frames, 3, "one undo removes the frame")
+  equals(doc.resolveLayer(sprite, "torso"):cel(2), nil, "and the poses")
+  sprite:close()
+end)
+
+test("a rig survives save and reopen", function()
+  local sprite = rigged({ color = INK })
+  call("rig.pose", { frame = 2, parts = { torso = { dy = 1 } } })
+  local path = tempPath("rig.aseprite")
+  call("sprite.save", { path = path })
+  sprite:close()
+  local opened = call("sprite.open", { path = path })
+  equals(opened.rig.parts[1], "leg_far", "rig read back")
+  local result = call("rig.refresh", {})
+  equals(result.kept, nil, "no posed cel looks hand-edited after a reload")
+  equals(result.outlinesKept, nil, "nor any outline")
+  app.sprite:close()
+end)
+
 print("=== wire path ===")
 test("empty arrays encode as [] on the wire", function()
   -- Caught live: the encoder spaces the placeholder differently from the

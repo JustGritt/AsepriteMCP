@@ -1236,6 +1236,97 @@ class TestHistory:
 # ---------------------------------------------------------------------- completeness
 
 
+# ------------------------------------------------------------------------ rig
+
+
+class TestRig:
+    async def test_pose_frame_expands_offsets_and_normalizes_colors(self, server, aseprite):
+        mcp, _ = server
+        await ok(mcp, "pose_frame", frame=3, parts={
+            "torso": [0, 1],
+            "leg_far": {"frame": 2, "layer": "leg_near", "recolor": {"#6b5a44": "#4d4032"}},
+            "arm": {"hide": True},
+        })
+        assert aseprite.last("rig.pose")["params"] == {
+            "frame": 3,
+            "parts": {
+                "torso": {"dx": 0, "dy": 1},
+                "leg_far": {"dx": 0, "dy": 0, "frame": 2, "layer": "leg_near",
+                            "recolor": {"#6b5a44ff": "#4d4032ff"}},
+                "arm": {"dx": 0, "dy": 0, "hide": True},
+            },
+        }
+
+    async def test_pose_frame_rejects_a_bad_offset(self, server, aseprite):
+        mcp, _ = server
+        message = await err(mcp, "pose_frame", frame=2, parts={"torso": [1]})
+        assert "torso" in message and "[dx, dy]" in message
+        assert not aseprite.requests
+
+    async def test_pose_frame_without_parts_sends_none(self, server, aseprite):
+        mcp, _ = server
+        await ok(mcp, "pose_frame", frame=2)
+        assert aseprite.last("rig.pose")["params"] == {"frame": 2}
+
+    async def test_define_rig_sends_only_what_was_given(self, server, aseprite):
+        mcp, _ = server
+        await ok(mcp, "define_rig", parts=["torso", "head", "hat"], follows={"hat": "head"},
+                 outline={"color": "#20222c", "parts": ["torso", "head"], "floor": 23})
+        assert aseprite.last("rig.define")["params"] == {
+            "parts": ["torso", "head", "hat"],
+            "rest": 1,
+            "follows": {"hat": "head"},
+            "outline": {"color": "#20222cff", "parts": ["torso", "head"], "floor": 23},
+        }
+        await ok(mcp, "define_rig", parts=["torso"], rest_frame=2)
+        assert aseprite.last("rig.define")["params"] == {"parts": ["torso"], "rest": 2}
+
+    async def test_split_layer_keeps_the_label_order(self, server, aseprite):
+        mcp, _ = server
+        await ok(mcp, "split_layer", layer="body", x=5, y=2, rows=["hh", "tt"],
+                 parts={"t": "torso", "h": "head"})
+        params = aseprite.last("cel.split")["params"]
+        assert params["parts"] == [["t", "torso"], ["h", "head"]]
+        assert params["rows"] == ["hh", "tt"]
+
+    async def test_split_layer_warns_on_uneven_rows(self, server, aseprite):
+        mcp, _ = server
+        payload = json_of(await ok(mcp, "split_layer", layer="body", x=0, y=0,
+                                   rows=["hh", "h"], parts={"h": "head"}))
+        assert "miscounted" in payload["warning"]
+
+    async def test_split_layer_rejects_reserved_characters(self, server, aseprite):
+        mcp, _ = server
+        assert "'.'" in await err(mcp, "split_layer", layer="body", x=0, y=0,
+                                  rows=["."], parts={".": "head"})
+
+    async def test_refresh_rig_flags(self, server, aseprite):
+        mcp, _ = server
+        await ok(mcp, "refresh_rig")
+        assert aseprite.last("rig.refresh")["params"] == {}
+        await ok(mcp, "refresh_rig", frames=[2, 3], force=True)
+        assert aseprite.last("rig.refresh")["params"] == {"frames": [2, 3], "force": True}
+        assert "frames" in await err(mcp, "refresh_rig", frames=[])
+
+    async def test_get_region_by_layer(self, server, aseprite):
+        mcp, _ = server
+        await ok(mcp, "get_region", x=0, y=0, width=4, height=4, by_layer=True)
+        assert aseprite.last("inspect.region")["params"]["byLayer"] is True
+        assert "by_layer" in await err(mcp, "get_region", x=0, y=0, width=4, height=4,
+                                       by_layer=True, layer="head")
+
+    async def test_a_walk_is_one_batch(self, server, aseprite):
+        mcp, _ = server
+        aseprite.reply("batch.run", {"applied": 3, "undoSteps": 1, "results": []})
+        await ok(mcp, "batch", ops=[
+            {"tool": "create_frame", "args": {}},
+            {"tool": "pose_frame", "args": {"frame": 2, "parts": {"torso": [0, 1]}}},
+            {"tool": "refresh_rig", "args": {}},
+        ])
+        ops = aseprite.last("batch.run")["params"]["ops"]
+        assert [op["command"] for op in ops] == ["frame.create", "rig.pose", "rig.refresh"]
+
+
 MINIMAL_ARGUMENTS = {
     "get_connection_status": {},
     "get_sprite_info": {},
@@ -1278,6 +1369,10 @@ MINIMAL_ARGUMENTS = {
     "delete_animation_tag": {"name": "idle"},
     "undo": {},
     "redo": {},
+    "split_layer": {"layer": "body", "x": 0, "y": 0, "rows": ["h"], "parts": {"h": "head"}},
+    "define_rig": {"parts": ["torso", "head"]},
+    "pose_frame": {"frame": 2},
+    "refresh_rig": {},
 }
 
 

@@ -106,7 +106,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         description=(
             "Exact pixels as rows of characters: '.' is transparent, ' ' is off-canvas, and "
             "legend maps the rest to colors. Cheaper than a preview for exact checks; "
-            "draw_rows writes the same format."
+            "draw_rows writes the same format. by_layer labels pixels by layer instead."
         ),
     )
     async def get_region(
@@ -116,6 +116,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         height: int,
         frame: int | None = None,
         layer: str | None = None,
+        by_layer: bool = False,
     ) -> str:
         if width <= 0 or height <= 0:
             raise BridgeError(
@@ -132,6 +133,13 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         params: dict[str, Any] = {"x": x, "y": y, "width": width, "height": height}
         if frame is not None:
             params["frame"] = frame
+        if by_layer:
+            if layer is not None:
+                raise BridgeError(
+                    ErrorCode.INVALID_PARAMS,
+                    "by_layer labels every visible layer, so it takes no layer.",
+                )
+            params["byLayer"] = True
         if layer is not None:
             params["layer"] = layer
         return as_json(await ctx.call("inspect.region", params))

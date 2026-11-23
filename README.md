@@ -10,6 +10,7 @@ Edits land in the document you already have open, so you watch them happen.
 - Architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Wire protocol: [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
 - Tool reference: [`docs/TOOLS.md`](docs/TOOLS.md)
+- Animation and rigging: [`docs/ANIMATION.md`](docs/ANIMATION.md)
 
 ## Requirements
 
@@ -21,8 +22,13 @@ Edits land in the document you already have open, so you watch them happen.
 ```sh
 uv sync
 uv run pytest
-powershell -ExecutionPolicy Bypass -File scripts/install-extension.ps1
+scripts/install-extension.sh                                            # macOS, Linux
+powershell -ExecutionPolicy Bypass -File scripts/install-extension.ps1  # Windows
 ```
+
+Both take `--link` (`-Link` on Windows) to link the extension to this checkout
+instead of copying it, so a change to the Lua side only needs an Aseprite
+restart.
 
 Restart Aseprite, then register the server with your MCP client:
 

@@ -8,9 +8,12 @@
 --
 -- Neither returns a reliable frameNumber for the frame it created, so the new
 -- index is computed rather than read back.
+--
+-- A rig names frames by number (its rest frame, and each pose's source), so
+-- every insert and delete here renumbers it in the same transaction.
 
 return function(deps)
-  local proto, doc = deps.proto, deps.doc
+  local proto, doc, rigstore = deps.proto, deps.doc, deps.rigstore
   local M = {}
 
   M["frame.select"] = function(params)
@@ -31,6 +34,7 @@ return function(deps)
 
     app.transaction("mcp: create frame", function()
       sprite:newEmptyFrame(position)
+      rigstore.onInsert(sprite, position)
     end)
     app.frame = sprite.frames[position]
     return {
@@ -46,6 +50,7 @@ return function(deps)
 
     app.transaction("mcp: duplicate frame", function()
       sprite:newFrame(source)
+      rigstore.onInsert(sprite, source + 1)
     end)
 
     local created = source + 1
@@ -69,6 +74,7 @@ return function(deps)
     end
     app.transaction("mcp: delete frame", function()
       sprite:deleteFrame(frameNumber)
+      rigstore.onDelete(sprite, frameNumber)
     end)
     return { deleted = frameNumber, frameCount = #sprite.frames }
   end

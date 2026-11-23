@@ -2,7 +2,7 @@
 
 return function(deps)
   local proto, doc = deps.proto, deps.doc
-  local fsio, render = deps.fsio, deps.render
+  local fsio, render, rigstore = deps.fsio, deps.render, deps.rigstore
   local M = {}
 
   --- Cheap liveness/status probe used by get_connection_status.
@@ -21,6 +21,18 @@ return function(deps)
   -- more model turn re-reading the whole context. Fields at their usual value
   -- (visible, opaque, forward, looping) are left out rather than repeated.
   -- sprite.open and sprite.new return it too, so no read has to follow them.
+  --- The rig, if the file has one, so a new session finds it without asking.
+  local function rigSummary(sprite)
+    local rig = rigstore.load(sprite)
+    if not rig then return nil end
+    return {
+      rest = rig.rest,
+      parts = proto.array(rig.parts),
+      follows = next(rig.follows) and rig.follows or nil,
+      outline = rig.outline and rig.outline.color or nil,
+    }
+  end
+
   local function overview(sprite)
     local active = app.layer
 
@@ -66,6 +78,7 @@ return function(deps)
       layers = proto.array(layers),
       frameMs = proto.array(durations),
       tags = proto.array(tags),
+      rig = rigSummary(sprite),
     }
   end
 

@@ -26,7 +26,11 @@ from tests.conftest import text_of, tiny_png
 # - new_sprite, ~560 bytes: without it an agent cannot start a sprite at all (#12).
 # - import_spritesheet and export_spritesheet, ~1 190 bytes: without them a game's
 #   sprite sheet cannot get in as frames or back out as a PNG.
-TOOL_LIST_BUDGET = 15_400
+# - the rig (split_layer, define_rig, pose_frame, refresh_rig, get_region
+#   by_layer), ~2 480 bytes: without it an agent animated each character through
+#   hundreds of lines of throwaway pixel scripts and full-frame draw_rows
+#   (docs/ANIMATION.md).
+TOOL_LIST_BUDGET = 17_900
 
 
 def compact(value) -> int:

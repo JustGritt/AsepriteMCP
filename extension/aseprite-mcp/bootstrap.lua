@@ -24,8 +24,10 @@ return function()
   -- Aseprite only ever raises its Security prompt for a single script file.
   local fsio = loadModule("fsio.lua")
 
+  local rigstore = loadModule("rigstore.lua")
+
   local deps = {
-    proto = proto, doc = doc, color = color, render = render, fsio = fsio,
+    proto = proto, doc = doc, color = color, render = render, fsio = fsio, rigstore = rigstore,
   }
 
   local dispatch = {}
@@ -38,6 +40,7 @@ return function()
     "commands/inspection.lua",
     "commands/animation.lua",
     "commands/history.lua",
+    "commands/rig.lua",
   }
   for _, path in ipairs(groups) do
     local commands = loadModule(path)(deps)
