@@ -69,7 +69,17 @@ The design follows unity-mcp's HTTP mode:
 - **Sessionless clients name the window per call.** On the 2026-07-28 protocol
   each call is a self-contained POST with no session id, so it gets fresh
   memory and nothing chosen carries over. `aseprite_instance` covers that. The
-  server strips it before validation, so no tool schema pays for it.
+  server strips it before validation, so no tool schema pays for it. Claude
+  Code 2.1 speaks this protocol over HTTP: no call carries a session id.
+- **Agents sharing a window name their sprite per call** (#34).
+  `aseprite_sprite` (a `spriteId` or file name) rides on each request, and the
+  extension makes that sprite active before running the command. Undo,
+  `app.transaction` and the active layer and frame all follow the active
+  sprite in Aseprite, so nothing else needs to know. `sprite.id` rather than a
+  stored property: it is stable while Aseprite runs, needs no write to the
+  file, and unsaved sprites made by a script all share one file name. It is a
+  per-call argument rather than session memory because the sessionless
+  protocol keeps none. The window's tab follows whoever ran last.
 - **One lock per window** (#33). A call first resolves its window as above,
   then takes that window's lock for the whole call, so two calls never
   interleave inside one Aseprite, while an agent on another window does not wait

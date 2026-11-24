@@ -2106,6 +2106,7 @@ local sent = {}
 local queue = dofile(app.fs.joinPath(EXT_DIR, "queue.lua"))({
   proto = core.proto,
   dispatch = dispatch,
+  doc = core.doc,
   trace = { write = function() end, writef = function() end, isEnabled = function() return false end },
 })
 queue.setSender(function(text) sent[#sent + 1] = text end)
@@ -2145,6 +2146,31 @@ test("a raw request with array params survives decoding", function()
   equals(reply.ok, true, "draw.pixels accepted a decoded array")
   equals(reply.result.written, 2, "both pixels written")
   sprite:close()
+end)
+
+test("a request naming a sprite edits and undoes that sprite only (#34)", function()
+  local mine = newSprite(4, 4)
+  local theirs = newSprite(4, 4)
+  local function to(sprite, id, command, params)
+    return sendRaw(json.encode({ id = id, command = command, params = params, sprite = sprite }))
+  end
+  local function pixel(sprite)
+    local cel = sprite.layers[1]:cel(1)
+    return cel and cel.image:getPixel(1 - cel.position.x, 1 - cel.position.y) or 0
+  end
+  local px = { pixels = { { x = 1, y = 1, color = "#ff0000ff" } } }
+  equals(to(mine.id, 30, "draw.pixels", px).ok, true, "drew by spriteId")
+  equals(to(tostring(theirs.id), 31, "draw.pixels", px).ok, true, "drew by spriteId as text")
+  check(pixel(mine) ~= 0 and pixel(theirs) ~= 0, "each sprite got its own pixel")
+  app.sprite = theirs
+  equals(to(mine.id, 32, "history.undo", {}).ok, true, "undo by spriteId")
+  equals(pixel(mine), 0, "undo reverted the named sprite")
+  check(pixel(theirs) ~= 0, "and left the active one alone")
+  local missing = to(9999, 33, "sprite.info", {})
+  equals(missing.error.code, "NO_ACTIVE_SPRITE", "an unknown sprite is refused")
+  check(missing.error.message:find(tostring(mine.id), 1, true), "the error lists open sprites")
+  mine:close()
+  theirs:close()
 end)
 
 --- A command as the socket delivers it. Numbers decode to floats there, which a

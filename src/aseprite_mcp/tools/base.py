@@ -47,6 +47,12 @@ _instance_override: ContextVar[str | None] = ContextVar(
 )
 
 
+# A sprite named on the call itself (aseprite_sprite): a spriteId or file name
+# that Aseprite makes active before each command, so several agents can share
+# one window (#34). None: the window's active sprite.
+_sprite_override: ContextVar[Any] = ContextVar("aseprite_mcp_sprite_override", default=None)
+
+
 @dataclass
 class SessionMemory:
     """What one MCP session remembers between its calls. Gone when the server restarts."""
@@ -103,7 +109,8 @@ class ToolContext:
             recording.append((command, dict(params or {})))
             return {}
         return await self.bridge.call(
-            command, params, timeout=timeout, instance=self.selected_instance()
+            command, params, timeout=timeout, instance=self.selected_instance(),
+            sprite=_sprite_override.get(),
         )
 
     def selected_instance(self) -> str | None:

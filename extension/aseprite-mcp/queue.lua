@@ -88,7 +88,11 @@ return function(deps)
       return
     end
 
-    local ok, result = pcall(handler, message.params or {})
+    local ok, result = pcall(function()
+      -- The sprite this agent works on, when several share the window (#34).
+      if message.sprite ~= nil then deps.doc.activate(message.sprite) end
+      return handler(message.params or {})
+    end)
     if ok then
       stats.handled = stats.handled + 1
       local encoded = proto.successMessage(id, result)

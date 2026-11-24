@@ -28,7 +28,14 @@ from .tools import (
     rig,
     sprite,
 )
-from .tools.base import SessionMemory, ToolContext, _instance_override, _recording, _session
+from .tools.base import (
+    SessionMemory,
+    ToolContext,
+    _instance_override,
+    _recording,
+    _session,
+    _sprite_override,
+)
 from .usage import UsageLog
 
 log = logging.getLogger(__name__)
@@ -73,6 +80,8 @@ conversation and every image stays in it, so get there in few calls:
 - With several Aseprite windows connected, calls fail with INSTANCE_REQUIRED
   until select_instance picks one for this session (by id, name or open
   document). A client without MCP sessions passes aseprite_instance on each call.
+- Sharing one window with other agents, pass aseprite_sprite (your sprite's
+  spriteId, or its file name) on every call, so each works on its own sprite.
 
 Reuse existing palette colors instead of introducing near-duplicates. Each call,
 or each whole batch, is one undo step.
@@ -117,6 +126,9 @@ def slim_schema(schema: Any) -> Any:
 # tool declares it and no schema pays for it; INSTRUCTIONS and the
 # INSTANCE_REQUIRED error say it exists.
 INSTANCE_ARGUMENT = "aseprite_instance"
+# The same for a sprite in that window (#34), so agents sharing one window each
+# work on their own. Passed to Aseprite as given: a spriteId or a file name.
+SPRITE_ARGUMENT = "aseprite_sprite"
 
 
 class AsepriteServer(MCPServer):
@@ -149,11 +161,10 @@ class AsepriteServer(MCPServer):
         # Batch validation recursively calls tools inside the batch's own call.
         if _recording.get() is not None:
             return await super().call_tool(name, arguments, context)
-        chosen = None
-        if INSTANCE_ARGUMENT in arguments:
-            arguments = dict(arguments)
-            chosen = arguments.pop(INSTANCE_ARGUMENT)
+        arguments = dict(arguments)
+        chosen = arguments.pop(INSTANCE_ARGUMENT, None)
         override = _instance_override.set(None if chosen is None else str(chosen))
+        sprite = _sprite_override.set(arguments.pop(SPRITE_ARGUMENT, None))
         session = _session.set(self._memory_for(context))
         try:
             window = self._window()
@@ -166,6 +177,7 @@ class AsepriteServer(MCPServer):
                 return await self._call_tool(name, arguments, context)
         finally:
             _session.reset(session)
+            _sprite_override.reset(sprite)
             _instance_override.reset(override)
 
     def _memory_for(self, context: Any) -> SessionMemory | None:

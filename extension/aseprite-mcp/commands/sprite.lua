@@ -76,6 +76,7 @@ return function(deps)
     end
 
     return {
+      spriteId = sprite.id,
       path = sprite.filename,
       width = sprite.width,
       height = sprite.height,
