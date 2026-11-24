@@ -88,6 +88,17 @@ Start this once in a terminal and leave it running:
 uv run --directory C:\Users\Gritt\orca\AsepriteMCP aseprite-mcp --http 8766
 ```
 
+Or, on Windows, have it start at logon with no window (run once; no admin
+needed; `-Uninstall` removes it):
+
+```powershell
+scripts\install-server-task.ps1 -AllowedDirs 'C:\path\to\sprites;D:\other\art'
+```
+
+It runs this checkout's `.venv` (`uv sync` first) and saves `-AllowedDirs` as
+your user's `ASEPRITE_MCP_ALLOWED_DIRS`. After pulling or switching branches,
+`Stop-ScheduledTask aseprite-mcp; Start-ScheduledTask aseprite-mcp`.
+
 Use your own repository path on other machines. Configure every MCP client to
 use the same Streamable HTTP URL: `http://127.0.0.1:8766/mcp`. For clients with
 JSON MCP configuration, the server entry is typically:
