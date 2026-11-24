@@ -114,7 +114,8 @@ If `8766` is occupied, choose another `--http` port and update the client URLs.
 If an unrelated app owns `32145`, change `ASEPRITE_MCP_PORT` and the Aseprite
 dialog to the same free port. HTTP always binds to `127.0.0.1`.
 
-Whole tool calls are serialized, including batches and their previews. Drawing
+Whole tool calls on one Aseprite window are serialized, including batches and
+their previews; agents on different windows do not wait for each other. Drawing
 legends and preview history are separate for each HTTP session (the most recent
 128 sessions are remembered; stateless requests have no remembered history).
 Disconnecting a client leaves the server and other clients running.

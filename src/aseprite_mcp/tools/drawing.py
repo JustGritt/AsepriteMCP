@@ -171,12 +171,12 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     ) -> str:
         reused = legend is None
         if reused:
-            if ctx.last_legend is None:
+            if ctx.memory.last_legend is None:
                 raise BridgeError(
                     ErrorCode.INVALID_PARAMS,
                     "legend is required: there is no earlier draw_rows legend to reuse.",
                 )
-            legend = ctx.last_legend
+            legend = ctx.memory.last_legend
         resolved = _resolve_legend(legend)
 
         # Relative to the origin, so the shape can be stamped at every repeat_at.
@@ -211,7 +211,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             for pixel in shape
         ]
         _check_batch(len(encoded))
-        ctx.last_legend = legend
+        ctx.memory.last_legend = legend
 
         params = {"pixels": encoded, **_target(layer, frame)}
         result = await ctx.call("draw.pixels", params, timeout=ctx.config.render_timeout)

@@ -1165,7 +1165,7 @@ class TestRepeatedImages:
         ctx.image_or_note(first, "a")
         for i in range(MAX_REMEMBERED_IMAGES):
             ctx.image_or_note(Image(data=b"other %d" % i, format="png"), f"view {i}")
-        assert len(ctx._image_labels) == MAX_REMEMBERED_IMAGES
+        assert len(ctx.memory.image_labels) == MAX_REMEMBERED_IMAGES
         assert ctx.image_or_note(first, "a") is first
 
 

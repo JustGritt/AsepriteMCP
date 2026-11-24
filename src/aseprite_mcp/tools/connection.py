@@ -172,7 +172,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
                 )
             chosen = ctx.bridge.match(holding[0]["id"])
             assert chosen is not None
-        ctx.instance = chosen.id
+        ctx.memory.instance = chosen.id
         status = await _status_of(ctx, chosen)
         return as_json({
             "selected": chosen.id,
