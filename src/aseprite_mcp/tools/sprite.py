@@ -173,7 +173,8 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         description=(
             "Write visible layers of all frames, or one tag, as a grid to a new PNG, one row "
             "unless columns is set. With onto, an existing PNG, replace only the cells at x,y "
-            "of a copy; path may equal onto to update it. The sprite is not changed."
+            "of a copy; path may equal onto to update it. replace=true overwrites an "
+            "existing PNG at path. The sprite is not changed."
         ),
     )
     async def export_spritesheet(
@@ -183,6 +184,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         x: int = 0,
         y: int = 0,
         tag: str | None = None,
+        replace: bool = False,
     ) -> str:
         if columns is not None and columns < 1:
             raise BridgeError(ErrorCode.INVALID_PARAMS, "columns must be at least 1.")
@@ -199,11 +201,15 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             base = resolve_in_sandbox(onto, allowed, suffixes=SHEET_SUFFIXES, must_exist=True)
             params.update(onto=str(base), x=x, y=y)
         # A PNG holds no layers to go back to, so replacing one takes a clear intent.
-        if resolved.exists() and (base is None or canonical(base) != canonical(resolved)):
+        if (
+            resolved.exists()
+            and not replace
+            and (base is None or canonical(base) != canonical(resolved))
+        ):
             raise BridgeError(
                 ErrorCode.INVALID_PARAMS,
-                f"{resolved.name} already exists. Choose another path, or pass onto with the "
-                "same path to update it.",
+                f"{resolved.name} already exists. Pass replace=true to overwrite it, or onto "
+                "with the same path to update only these cells.",
             )
         if columns is not None:
             params["columns"] = columns

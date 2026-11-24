@@ -277,8 +277,17 @@ class TestExportSpritesheet:
         (sandbox / "sheet.png").write_bytes(b"work")
         message = await err(mcp, "export_spritesheet", path="sheet.png")
         assert "already exists" in message
-        assert "onto" in message
+        assert "onto" in message and "replace=true" in message
         assert not aseprite.requests
+
+    async def test_replace_overwrites_a_sheet_whose_layout_changed(self, server, aseprite, sandbox):
+        """onto cannot hold more frames than the old sheet had; replace can."""
+        mcp, _ = server
+        (sandbox / "sheet.png").write_bytes(b"work")
+        await ok(mcp, "export_spritesheet", path="sheet.png", replace=True)
+        params = aseprite.last("sprite.exportSheet")["params"]
+        assert params["path"] == str(sandbox / "sheet.png")
+        assert "onto" not in params
 
     async def test_onto_a_different_file_still_needs_a_new_path(self, server, aseprite, sandbox):
         mcp, _ = server
