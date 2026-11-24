@@ -567,8 +567,8 @@ frame used to cost one turn per step; a batch is one turn.
   - `paletteNotes` lists each palette note once, at most five.
 - `preview=true` appends a canvas preview of the last frame an op reported.
 - Batchable tools: the drawing, cel, frame and rig tools, `select_layer`,
-  `create_layer`, `set_layer_visibility` and the tag tools. Previews, file
-  access, `undo`/`redo` and `delete_layer` must be called directly.
+  `create_layer`, `delete_layer`, `set_layer_visibility` and the tag tools.
+  Previews, file access and `undo`/`redo` must be called directly.
 
 ---
 

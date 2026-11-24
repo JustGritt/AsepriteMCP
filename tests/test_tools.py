@@ -744,6 +744,16 @@ class TestBatch:
                 "pixels": [{"x": 1, "y": 1, "color": "#ff0000ff"}], "frame": 2}},
         ]
 
+    async def test_a_new_sprite_s_default_layer_goes_in_the_same_batch(self, server, aseprite):
+        """Agents named their layers in a batch, then deleted Layer 1 in a call of its own."""
+        mcp, _ = server
+        await ok(mcp, "batch", ops=[
+            {"tool": "create_layer", "args": {"name": "body"}},
+            {"tool": "delete_layer", "args": {"layer": "Layer 1"}},
+        ])
+        assert [op["command"] for op in aseprite.last("batch.run")["params"]["ops"]] == [
+            "layer.create", "layer.delete"]
+
     async def test_a_bad_op_stops_the_batch_before_anything_is_sent(self, server, aseprite):
         mcp, _ = server
         message = await err(mcp, "batch", ops=[
