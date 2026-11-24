@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 
 from .config import Config
@@ -19,10 +18,6 @@ def _port(value: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Under pythonw (the windowless logon task) these are None, and uvicorn's
-    # log setup calls sys.stdout.isatty().
-    sys.stdout = sys.stdout or open(os.devnull, "w")
-    sys.stderr = sys.stderr or open(os.devnull, "w")
     parser = argparse.ArgumentParser(description="Control a live Aseprite session.")
     parser.add_argument("--http", type=_port, metavar="PORT",
                         help="serve shared MCP HTTP on 127.0.0.1:PORT/mcp instead of stdio")
