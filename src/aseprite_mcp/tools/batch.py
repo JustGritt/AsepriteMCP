@@ -144,8 +144,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         description=(
             "Run several editing tools in one call and one undo step: ops=[{tool, args}], "
             "in order. All or nothing. preview=true appends a preview of the last frame "
-            "edited. Previews, save/open, undo/redo and delete_layer must be called "
-            "directly."
+            "edited. Previews, save/open and undo/redo must be called directly."
         ),
     )
     async def batch(ops: list[BatchOp], preview: bool = False) -> list[Image | str]:
