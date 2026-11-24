@@ -138,21 +138,23 @@ matter whether it is also open in a tab: the file on disk is what gets read.
 Replies with the same overview as `get_sprite_info`, plus
 `"sheet": {"columns": 4, "rows": 11, "emptyFrames": [39, 43]}`.
 
-### `export_spritesheet(path, columns=None, onto=None, x=0, y=0, tag=None)`
+### `export_spritesheet(path, columns=None, onto=None, x=0, y=0, tag=None, replace=False)`
 Writes the visible layers of every frame, or of one `tag`, as a grid to a `.png`
 inside an allowed directory. A hidden layer stays out, so a reference layer can
 live in the project. The sprite, its layers and its own file do not change.
 
 - **Without `onto`** it makes a new sheet, one row unless `columns` is set. `path`
-  must not exist yet. Each side is limited to 8192 pixels.
+  must not exist yet, unless `replace=true`. Each side is limited to 8192 pixels.
 - **With `onto`,** an existing PNG, it starts from a copy of that sheet and replaces
   the cells at `x`, `y`. Pixels are replaced rather than blended, so erasing works
   and partial alpha lands exactly. Everything outside the frames written keeps what
   it had, including cells past the last frame. The block must fit inside the sheet.
 - **`changedPixels`** in the reply counts what `onto` changed. A round trip with no
   edits reports 0.
-- **Replacing an existing PNG takes `onto` with the same path.** A PNG has no layers
-  to go back to, so this is never done by accident.
+- **Replacing an existing PNG takes `replace=true`, or `onto` with the same path**
+  to update only the cells written. A PNG has no layers to go back to, so this is
+  never done by accident. `replace` also covers a sheet whose frame count changed,
+  which no longer fits under `onto`.
 
 A sheet with mixed frame sizes takes one import and one export per area, each
 pasted onto the result of the last:
@@ -567,8 +569,8 @@ frame used to cost one turn per step; a batch is one turn.
   - `paletteNotes` lists each palette note once, at most five.
 - `preview=true` appends a canvas preview of the last frame an op reported.
 - Batchable tools: the drawing, cel, frame and rig tools, `select_layer`,
-  `create_layer`, `set_layer_visibility` and the tag tools. Previews, file
-  access, `undo`/`redo` and `delete_layer` must be called directly.
+  `create_layer`, `delete_layer`, `set_layer_visibility` and the tag tools.
+  Previews, file access and `undo`/`redo` must be called directly.
 
 ---
 

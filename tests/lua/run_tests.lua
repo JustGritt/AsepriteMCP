@@ -581,6 +581,20 @@ test("batch.run applies several commands as one undo step", function()
   sprite:close()
 end)
 
+test("batch.run names a new sprite's layers and drops the default one", function()
+  local sprite = newSprite(8, 8)
+  local default = sprite.layers[1].name
+  call("batch.run", { ops = {
+    { command = "layer.create", params = { name = "body" } },
+    { command = "layer.delete", params = { layer = default } },
+  } })
+  equals(#sprite.layers, 1, "one layer left")
+  equals(sprite.layers[1].name, "body", "the named one")
+  call("history.undo", {})
+  equals(sprite.layers[1].name, default, "one undo brings the default layer back")
+  sprite:close()
+end)
+
 test("batch results carry what the server's summary reads", function()
   -- tools/batch.py replaces these results with a summary, and tests there use a
   -- fake extension. If a field is renamed here, this is what notices.

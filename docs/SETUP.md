@@ -82,13 +82,27 @@ next file.
 
 ### Multiple sessions: one shared HTTP server
 
-Start this once in a terminal and leave it running:
+Start it once in a terminal, with the folders agents may use, and leave it
+running. Windows (PowerShell), folders separated by `;`:
 
 ```powershell
-uv run --directory C:\Users\Gritt\orca\AsepriteMCP aseprite-mcp --http 8766
+$env:ASEPRITE_MCP_ALLOWED_DIRS = 'C:\path\to\sprites;D:\other\art'
+uv run --directory C:\path\to\AsepriteMCP aseprite-mcp --http 8766
 ```
 
-Use your own repository path on other machines. Configure every MCP client to
+macOS and Linux, folders separated by `:`:
+
+```sh
+ASEPRITE_MCP_ALLOWED_DIRS="$HOME/sprites:/path/to/other/art" \
+  uv run --directory /path/to/AsepriteMCP aseprite-mcp --http 8766
+```
+
+The variable reaches only a server started from that same terminal; changing it
+means stopping the server (Ctrl+C) and starting it again, as does pulling or
+switching branches. `get_connection_status` lists the folders the running
+server allows.
+
+Configure every MCP client to
 use the same Streamable HTTP URL: `http://127.0.0.1:8766/mcp`. For clients with
 JSON MCP configuration, the server entry is typically:
 
@@ -145,10 +159,9 @@ bring the running copy forward instead:
 ASEPRITE_MCP_INSTANCE=dragon /Applications/Aseprite.app/Contents/MacOS/aseprite &
 ```
 
-Set `ASEPRITE_MCP_ALLOWED_DIRS` in the shared server's environment before starting
-it to include your project asset folders. This allowlist is shared by all
-clients, not isolated per project. The server runs until you stop it; this mode
-does not install a background service or start automatically at login.
+The `ASEPRITE_MCP_ALLOWED_DIRS` allowlist is shared by all clients, not
+isolated per project. The server runs until you stop it; this mode does not
+install a background service or start automatically at login.
 
 ### Single session: stdio
 
@@ -241,7 +254,7 @@ All optional. The defaults work.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ASEPRITE_MCP_ALLOWED_DIRS` | `<repo>/sprites` | Directories the file tools (`open_sprite`, `save_sprite`, `import_spritesheet`, `export_spritesheet`) may touch, `;`-separated. Everything else is refused, including saving over a document you opened by hand from somewhere else. |
+| `ASEPRITE_MCP_ALLOWED_DIRS` | `<repo>/sprites` | Directories the file tools (`open_sprite`, `save_sprite`, `import_spritesheet`, `export_spritesheet`) may touch, separated by `;` on Windows and `:` elsewhere. Everything else is refused, including saving over a document you opened by hand from somewhere else. |
 | `ASEPRITE_MCP_PORT` | `32145` | Bridge port. Set it for **both** the server and Aseprite if you change it. On the Aseprite side a port typed into the connect dialog outranks this. |
 | `ASEPRITE_MCP_HOST` | `127.0.0.1` | Loopback only unless `ASEPRITE_MCP_ALLOW_NON_LOOPBACK=1`. Outranked by the connect dialog, same as the port. |
 | `ASEPRITE_MCP_EXTENSION_DIR` | this checkout's `extension/aseprite-mcp` | Server only: the copy of the extension a running Aseprite is checked against. `off` disables the check, which is also off when no copy is found. |

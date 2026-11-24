@@ -28,7 +28,7 @@ BATCHABLE = frozenset({
     "draw_pixels", "draw_rows", "draw_rect", "erase_pixels", "clear_cel", "fill", "draw_line",
     "shift_cel", "flip_cel", "copy_cel", "replace_color",
     "select_frame", "create_frame", "duplicate_frame", "delete_frame", "set_frame_duration",
-    "select_layer", "create_layer", "set_layer_visibility",
+    "select_layer", "create_layer", "delete_layer", "set_layer_visibility",
     "create_animation_tag", "update_animation_tag", "delete_animation_tag",
     "split_layer", "define_rig", "pose_frame", "refresh_rig",
 })
@@ -144,8 +144,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         description=(
             "Run several editing tools in one call and one undo step: ops=[{tool, args}], "
             "in order. All or nothing. preview=true appends a preview of the last frame "
-            "edited. Previews, save/open, undo/redo and delete_layer must be called "
-            "directly."
+            "edited. Previews, save/open and undo/redo must be called directly."
         ),
     )
     async def batch(ops: list[BatchOp], preview: bool = False) -> list[Image | str]:

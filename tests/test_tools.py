@@ -277,8 +277,17 @@ class TestExportSpritesheet:
         (sandbox / "sheet.png").write_bytes(b"work")
         message = await err(mcp, "export_spritesheet", path="sheet.png")
         assert "already exists" in message
-        assert "onto" in message
+        assert "onto" in message and "replace=true" in message
         assert not aseprite.requests
+
+    async def test_replace_overwrites_a_sheet_whose_layout_changed(self, server, aseprite, sandbox):
+        """onto cannot hold more frames than the old sheet had; replace can."""
+        mcp, _ = server
+        (sandbox / "sheet.png").write_bytes(b"work")
+        await ok(mcp, "export_spritesheet", path="sheet.png", replace=True)
+        params = aseprite.last("sprite.exportSheet")["params"]
+        assert params["path"] == str(sandbox / "sheet.png")
+        assert "onto" not in params
 
     async def test_onto_a_different_file_still_needs_a_new_path(self, server, aseprite, sandbox):
         mcp, _ = server
@@ -743,6 +752,16 @@ class TestBatch:
             {"command": "draw.pixels", "params": {
                 "pixels": [{"x": 1, "y": 1, "color": "#ff0000ff"}], "frame": 2}},
         ]
+
+    async def test_a_new_sprite_s_default_layer_goes_in_the_same_batch(self, server, aseprite):
+        """Agents named their layers in a batch, then deleted Layer 1 in a call of its own."""
+        mcp, _ = server
+        await ok(mcp, "batch", ops=[
+            {"tool": "create_layer", "args": {"name": "body"}},
+            {"tool": "delete_layer", "args": {"layer": "Layer 1"}},
+        ])
+        assert [op["command"] for op in aseprite.last("batch.run")["params"]["ops"]] == [
+            "layer.create", "layer.delete"]
 
     async def test_a_bad_op_stops_the_batch_before_anything_is_sent(self, server, aseprite):
         mcp, _ = server

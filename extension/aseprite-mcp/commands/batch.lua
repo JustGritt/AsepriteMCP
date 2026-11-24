@@ -13,6 +13,7 @@ local ALLOWED_PREFIXES = { "draw.", "cel.", "frame.", "rig." }
 local ALLOWED = {
   ["layer.select"] = true,
   ["layer.create"] = true,
+  ["layer.delete"] = true,
   ["layer.setVisibility"] = true,
   ["tag.create"] = true,
   ["tag.update"] = true,
