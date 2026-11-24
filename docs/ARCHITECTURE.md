@@ -13,7 +13,8 @@ one WebSocket bridge. The HTTP application lifespan owns the bridge, so closing
 one MCP session does not stop it. Shared mode refuses startup if the bridge port
 is occupied, rather than serving tools that cannot reach Aseprite.
 
-Whole tool calls are serialized; nested batch validation reuses the outer lock.
+Whole tool calls on one Aseprite window are serialized; calls on different
+windows run side by side. Nested batch validation reuses the outer lock.
 HTTP session IDs key a bounded cache of drawing legends and preview history.
 Stateless requests get fresh memory. The active document, undo history and file
 allowlist remain shared; this is not isolation between independent projects.
@@ -60,17 +61,31 @@ The design follows unity-mcp's HTTP mode:
   `select_instance`, else the only window connected. With several connected and
   no choice, the call fails with `INSTANCE_REQUIRED` and the list of windows.
   It never guesses: a guess is an edit landing in another agent's sprite.
-- **The choice is session memory.** `ToolContext.instance` is swapped in and
-  out with the legends and preview history, keyed on the transport-validated
-  `mcp-session-id`. Not on a client-supplied id, which two clients can share
-  (unity-mcp issue 1023), and not on the SDK's per-request session proxy, which
-  is rebuilt for every call.
+- **The choice is session memory.** `SessionMemory.instance` lives with the
+  legends and preview history, set per call through a ContextVar and keyed on
+  the transport-validated `mcp-session-id`. Not on a client-supplied id, which
+  two clients can share (unity-mcp issue 1023), and not on the SDK's
+  per-request session proxy, which is rebuilt for every call.
 - **Sessionless clients name the window per call.** On the 2026-07-28 protocol
   each call is a self-contained POST with no session id, so it gets fresh
   memory and nothing chosen carries over. `aseprite_instance` covers that. The
-  server strips it before validation, so no tool schema pays for it.
-- **No scheduler.** Whole tool calls are already serialized, so windows take
-  turns at the server; Aseprite runs one command at a time from its own queue.
+  server strips it before validation, so no tool schema pays for it. Claude
+  Code 2.1 speaks this protocol over HTTP: no call carries a session id.
+- **Agents sharing a window name their sprite per call** (#34).
+  `aseprite_sprite` (a `spriteId` or file name) rides on each request, and the
+  extension makes that sprite active before running the command. Undo,
+  `app.transaction` and the active layer and frame all follow the active
+  sprite in Aseprite, so nothing else needs to know. `sprite.id` rather than a
+  stored property: it is stable while Aseprite runs, needs no write to the
+  file, and unsaved sprites made by a script all share one file name. It is a
+  per-call argument rather than session memory because the sessionless
+  protocol keeps none. The window's tab follows whoever ran last.
+- **One lock per window** (#33). A call first resolves its window as above,
+  then takes that window's lock for the whole call, so two calls never
+  interleave inside one Aseprite, while an agent on another window does not wait
+  for them. A call that resolves to no window (none attached yet, or several and
+  no choice) takes a lock of its own, and window calls wait out any such call
+  in flight: one waiting for Aseprite to attach may then use the window.
 
 ## The six corrections
 

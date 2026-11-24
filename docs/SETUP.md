@@ -114,14 +114,18 @@ If `8766` is occupied, choose another `--http` port and update the client URLs.
 If an unrelated app owns `32145`, change `ASEPRITE_MCP_PORT` and the Aseprite
 dialog to the same free port. HTTP always binds to `127.0.0.1`.
 
-Whole tool calls are serialized, including batches and their previews. Drawing
+Whole tool calls on one Aseprite window are serialized, including batches and
+their previews; agents on different windows do not wait for each other. Drawing
 legends and preview history are separate for each HTTP session (the most recent
 128 sessions are remembered; stateless requests have no remembered history).
 Disconnecting a client leaves the server and other clients running.
 
 Clients that share **one Aseprite window** share its active document,
-selection, layers and undo history. Serialization prevents tool internals from
-interleaving; it does not reserve a document across multiple tool calls.
+selection, layers and undo history, unless each names its own sprite with
+`aseprite_sprite` on every call (the `spriteId` from `get_sprite_info`, or the
+file name). Aseprite then switches to that sprite before each command, so each
+agent's edits and undo stay on its sprite; the visible tab follows whichever
+agent ran last. Serialization prevents tool internals from interleaving.
 
 To give agents separate documents, open **one Aseprite window per agent**. Every
 window connects to the same bridge on `32145` and identifies itself with an id,

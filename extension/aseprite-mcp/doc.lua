@@ -22,6 +22,29 @@ function M.activeSprite()
   return sprite
 end
 
+--- Make the sprite a request names the active one, so several agents can share
+-- one window, each on its own sprite (#34). Undo, transactions and the active
+-- layer and frame all follow the active sprite. ref is a sprite id (spriteId in
+-- get_sprite_info), a file name or a full path.
+function M.activate(ref)
+  local found, names = {}, {}
+  for _, sprite in ipairs(app.sprites) do
+    local name = app.fs.fileName(sprite.filename)
+    names[#names + 1] = string.format("%s (%d)", name, sprite.id)
+    if sprite.id == ref or tostring(sprite.id) == ref or name == ref or sprite.filename == ref then
+      found[#found + 1] = sprite
+    end
+  end
+  if #found ~= 1 then
+    proto.failf(
+      proto.ERROR.NO_ACTIVE_SPRITE,
+      "%s sprite is open as %s. Open: %s. Name one by spriteId to tell same-named ones apart.",
+      #found == 0 and "No" or "More than one", tostring(ref), table.concat(names, ", ")
+    )
+  end
+  if app.sprite ~= found[1] then app.sprite = found[1] end
+end
+
 function M.colorModeName(mode)
   if mode == ColorMode.RGB then return "rgb" end
   if mode == ColorMode.GRAY then return "grayscale" end

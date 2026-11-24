@@ -47,26 +47,47 @@ _instance_override: ContextVar[str | None] = ContextVar(
 )
 
 
+# A sprite named on the call itself (aseprite_sprite): a spriteId or file name
+# that Aseprite makes active before each command, so several agents can share
+# one window (#34). None: the window's active sprite.
+_sprite_override: ContextVar[Any] = ContextVar("aseprite_mcp_sprite_override", default=None)
+
+
+@dataclass
+class SessionMemory:
+    """What one MCP session remembers between its calls. Gone when the server restarts."""
+
+    # The Aseprite window this session drives, from select_instance; None means
+    # "the only one connected".
+    instance: str | None = None
+    # The most recent draw_rows legend, so a run of edits in the same colors does
+    # not have to restate it.
+    last_legend: dict[str, str | int] | None = None
+    # Images already sent, digest -> label, oldest first, and the digest of the
+    # newest image sent under each label. See image_or_note.
+    image_labels: OrderedDict[str, str] = field(default_factory=OrderedDict)
+    latest_image: dict[str, str] = field(default_factory=dict)
+    skipped_images: set[tuple[str, str]] = field(default_factory=set)
+
+
+# The calling HTTP session's memory, set per call by AsepriteServer, so calls
+# from different sessions can run at once (#33). Unset: the context's own.
+_session: ContextVar[SessionMemory | None] = ContextVar("aseprite_mcp_session", default=None)
+
+
 @dataclass
 class ToolContext:
     """Everything a tool needs, in one injectable object."""
 
     bridge: AsepriteBridge
     config: Config
-    # The Aseprite window this session drives, from select_instance; None means
-    # "the only one connected". Per HTTP session, like the memory below.
-    instance: str | None = field(default=None, init=False, repr=False)
-    # The most recent draw_rows legend, so a run of edits in the same colors does
-    # not have to restate it. Memory only: it is gone when the server restarts.
-    last_legend: dict[str, str | int] | None = field(default=None, init=False, repr=False)
-    # Images already sent, digest -> label, oldest first, and the digest of the
-    # newest image sent under each label. See image_or_note.
-    _image_labels: OrderedDict[str, str] = field(
-        default_factory=OrderedDict, init=False, repr=False
-    )
-    _latest_image: dict[str, str] = field(default_factory=dict, init=False, repr=False)
-    _skipped_images: set[tuple[str, str]] = field(default_factory=set, init=False, repr=False)
+    _memory: SessionMemory = field(default_factory=SessionMemory, init=False, repr=False)
     _temp_dir: Path | None = field(default=None, init=False, repr=False)
+
+    @property
+    def memory(self) -> SessionMemory:
+        """This call's session memory: its HTTP session's, else the server's one (stdio)."""
+        return _session.get() or self._memory
 
     @property
     def temp_dir(self) -> Path:
@@ -88,14 +109,15 @@ class ToolContext:
             recording.append((command, dict(params or {})))
             return {}
         return await self.bridge.call(
-            command, params, timeout=timeout, instance=self.selected_instance()
+            command, params, timeout=timeout, instance=self.selected_instance(),
+            sprite=_sprite_override.get(),
         )
 
     def selected_instance(self) -> str | None:
         """The window this call goes to: named on the call, else the session's choice."""
         override = _instance_override.get()
         if override is None:
-            return self.instance
+            return self.memory.instance
         # Accept a name or id prefix as select_instance does. Unmatched, it goes
         # through as given, and the bridge reports it as not connected.
         matched = self.bridge.match(override)
@@ -118,15 +140,16 @@ class ToolContext:
         the way back for an agent whose copy was dropped by compaction or a
         cleared conversation, neither of which the server can see.
         """
+        memory = self.memory
         digest = hashlib.blake2b(image.data or b"", digest_size=16).hexdigest()
-        earlier = self._image_labels.get(digest)
+        earlier = memory.image_labels.get(digest)
         repeat = (digest, label)
         if (
             earlier is not None
-            and self._latest_image.get(earlier) == digest
-            and repeat not in self._skipped_images
+            and memory.latest_image.get(earlier) == digest
+            and repeat not in memory.skipped_images
         ):
-            self._skipped_images.add(repeat)
+            memory.skipped_images.add(repeat)
             seen = (
                 "Unchanged since this view's last image"
                 if earlier == label
@@ -134,15 +157,15 @@ class ToolContext:
             )
             return f"{seen}, so it was not sent again. If you no longer have it, call again."
 
-        self._skipped_images.discard(repeat)
-        self._image_labels[digest] = label
-        self._image_labels.move_to_end(digest)
-        self._latest_image[label] = digest
-        while len(self._image_labels) > MAX_REMEMBERED_IMAGES:
-            old_digest, old_label = self._image_labels.popitem(last=False)
-            if self._latest_image.get(old_label) == old_digest:
-                del self._latest_image[old_label]
-            self._skipped_images = {s for s in self._skipped_images if s[0] != old_digest}
+        memory.skipped_images.discard(repeat)
+        memory.image_labels[digest] = label
+        memory.image_labels.move_to_end(digest)
+        memory.latest_image[label] = digest
+        while len(memory.image_labels) > MAX_REMEMBERED_IMAGES:
+            old_digest, old_label = memory.image_labels.popitem(last=False)
+            if memory.latest_image.get(old_label) == old_digest:
+                del memory.latest_image[old_label]
+            memory.skipped_images = {s for s in memory.skipped_images if s[0] != old_digest}
         return image
 
     def cleanup(self) -> None:

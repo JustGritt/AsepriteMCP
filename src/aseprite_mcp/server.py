@@ -11,6 +11,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
+from .bridge.protocol import BridgeError
 from .bridge.ws_server import AsepriteBridge
 from .config import Config
 from .tools import (
@@ -27,7 +28,14 @@ from .tools import (
     rig,
     sprite,
 )
-from .tools.base import ToolContext, _instance_override, _recording
+from .tools.base import (
+    SessionMemory,
+    ToolContext,
+    _instance_override,
+    _recording,
+    _session,
+    _sprite_override,
+)
 from .usage import UsageLog
 
 log = logging.getLogger(__name__)
@@ -72,6 +80,8 @@ conversation and every image stays in it, so get there in few calls:
 - With several Aseprite windows connected, calls fail with INSTANCE_REQUIRED
   until select_instance picks one for this session (by id, name or open
   document). A client without MCP sessions passes aseprite_instance on each call.
+- Sharing one window with other agents, pass aseprite_sprite (your sprite's
+  spriteId, or its file name) on every call, so each works on its own sprite.
 
 Reuse existing palette colors instead of introducing near-duplicates. Each call,
 or each whole batch, is one undo step.
@@ -116,6 +126,9 @@ def slim_schema(schema: Any) -> Any:
 # tool declares it and no schema pays for it; INSTRUCTIONS and the
 # INSTANCE_REQUIRED error say it exists.
 INSTANCE_ARGUMENT = "aseprite_instance"
+# The same for a sprite in that window (#34), so agents sharing one window each
+# work on their own. Passed to Aseprite as given: a spriteId or a file name.
+SPRITE_ARGUMENT = "aseprite_sprite"
 
 
 class AsepriteServer(MCPServer):
@@ -124,9 +137,13 @@ class AsepriteServer(MCPServer):
     def __init__(self, *args: Any, usage_log: UsageLog | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._usage_log = usage_log
-        self._tool_lock = asyncio.Lock()
-        self._shared_context: ToolContext | None = None
-        self._session_memory: OrderedDict[str, ToolContext] = OrderedDict()
+        # One lock per Aseprite window id (#33): calls on one window never
+        # interleave, calls on different windows run side by side. None is for
+        # calls that resolve to no window.
+        self._locks: dict[str | None, asyncio.Lock] = {None: asyncio.Lock()}
+        self._context: ToolContext | None = None
+        self._shared = False
+        self._session_memory: OrderedDict[str, SessionMemory] = OrderedDict()
 
     def tool(self, *args: Any, structured_output: bool | None = False, **kwargs: Any):
         # Every tool already returns JSON as text. Left on, the SDK also derives
@@ -141,46 +158,56 @@ class AsepriteServer(MCPServer):
         ]
 
     async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None):
-        # Batch validation recursively calls tools while already holding the lock.
+        # Batch validation recursively calls tools inside the batch's own call.
         if _recording.get() is not None:
             return await super().call_tool(name, arguments, context)
-        if INSTANCE_ARGUMENT in arguments:
-            arguments = dict(arguments)
-            chosen = arguments.pop(INSTANCE_ARGUMENT)
-            if chosen is not None:
-                token = _instance_override.set(str(chosen))
-                try:
-                    return await self._call_locked(name, arguments, context)
-                finally:
-                    _instance_override.reset(token)
-        return await self._call_locked(name, arguments, context)
+        arguments = dict(arguments)
+        chosen = arguments.pop(INSTANCE_ARGUMENT, None)
+        override = _instance_override.set(None if chosen is None else str(chosen))
+        sprite = _sprite_override.set(arguments.pop(SPRITE_ARGUMENT, None))
+        session = _session.set(self._memory_for(context))
+        try:
+            window = self._window()
+            async with self._locks.setdefault(window, asyncio.Lock()):
+                if window is not None:
+                    # A call that found no window may be waiting for one to attach
+                    # and then use it, so let it finish first.
+                    async with self._locks[None]:
+                        pass
+                return await self._call_tool(name, arguments, context)
+        finally:
+            _session.reset(session)
+            _sprite_override.reset(sprite)
+            _instance_override.reset(override)
 
-    async def _call_locked(self, name: str, arguments: dict[str, Any], context: Any):
-        async with self._tool_lock:
-            ctx = self._shared_context
-            if ctx is None or context is None:
-                return await self._call_tool(name, arguments, context)
-            # The SDK session proxy can be recreated for every request. HTTP's
-            # transport-validated session id is stable. Stateless calls get fresh
-            # memory; this id is only a cache key, never an access-control boundary.
-            session = (context.headers or {}).get("mcp-session-id")
-            memory = self._session_memory.get(session) if session else None
-            if memory is None:
-                memory = ToolContext(bridge=ctx.bridge, config=ctx.config)
-            if session:
-                self._session_memory[session] = memory
-                self._session_memory.move_to_end(session)
-                while len(self._session_memory) > 128:
-                    self._session_memory.popitem(last=False)
-            fields = ("last_legend", "_image_labels", "_latest_image", "_skipped_images",
-                      "instance")
-            for field in fields:
-                setattr(ctx, field, getattr(memory, field))
-            try:
-                return await self._call_tool(name, arguments, context)
-            finally:
-                for field in fields:
-                    setattr(memory, field, getattr(ctx, field))
+    def _memory_for(self, context: Any) -> SessionMemory | None:
+        """The calling HTTP session's memory; None means the context's own (stdio)."""
+        if not self._shared or context is None:
+            return None
+        # The SDK session proxy can be recreated for every request. HTTP's
+        # transport-validated session id is stable. Stateless calls get fresh
+        # memory; this id is only a cache key, never an access-control boundary.
+        session = (context.headers or {}).get("mcp-session-id")
+        if not session:
+            return SessionMemory()
+        memory = self._session_memory.pop(session, None) or SessionMemory()
+        self._session_memory[session] = memory
+        while len(self._session_memory) > 128:
+            self._session_memory.popitem(last=False)
+        return memory
+
+    def _window(self) -> str | None:
+        """The id of the connected window this call will drive, or None if none yet."""
+        if self._context is None:
+            return None
+        try:
+            selected = self._context.selected_instance()
+        except BridgeError:  # an ambiguous name: the tool reports it
+            return None
+        ids = [instance.id for instance in self._context.bridge.instances]
+        if selected is None and len(ids) == 1:
+            return ids[0]
+        return selected if selected in ids else None
 
     async def _call_tool(self, name: str, arguments: dict[str, Any], context: Any = None):
         # Ops a batch is collecting are part of the batch's own entry.
@@ -231,8 +258,8 @@ def build_server(config: Config | None = None, *, shared: bool = False) -> tuple
         log_level=config.log_level,
         usage_log=UsageLog(config.usage_log) if config.usage_log else None,
     )
-    if shared:
-        mcp._shared_context = ctx
+    mcp._context = ctx
+    mcp._shared = shared
 
     for module in (
         connection, sprite, layers, frames, drawing, cels, inspection, animation, history, rig, image,

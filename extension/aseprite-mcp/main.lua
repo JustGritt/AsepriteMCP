@@ -11,6 +11,7 @@ local trace = dofile(app.fs.joinPath(SCRIPT_DIR, "trace.lua"))({ fsio = core.fsi
 local queue = dofile(app.fs.joinPath(SCRIPT_DIR, "queue.lua"))({
   proto = core.proto,
   dispatch = core.dispatch,
+  doc = core.doc,
   trace = trace,
 })
 local ws = dofile(app.fs.joinPath(SCRIPT_DIR, "ws.lua"))({ queue = queue, trace = trace })

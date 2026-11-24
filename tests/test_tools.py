@@ -1165,7 +1165,7 @@ class TestRepeatedImages:
         ctx.image_or_note(first, "a")
         for i in range(MAX_REMEMBERED_IMAGES):
             ctx.image_or_note(Image(data=b"other %d" % i, format="png"), f"view {i}")
-        assert len(ctx._image_labels) == MAX_REMEMBERED_IMAGES
+        assert len(ctx.memory.image_labels) == MAX_REMEMBERED_IMAGES
         assert ctx.image_or_note(first, "a") is first
 
 
@@ -1461,6 +1461,16 @@ class TestInstances:
         finally:
             for fake in fakes:
                 await fake.stop()
+
+    async def test_a_sprite_named_on_the_call_goes_with_each_command(self, server, aseprite):
+        """Agents sharing one window name their sprite on each call (#34)."""
+        mcp, _ = server
+        await ok(mcp, "batch", ops=[{"tool": "shift_cel", "args": {"dx": 1}}], aseprite_sprite=3)
+        sent = aseprite.last("batch.run")
+        assert sent["sprite"] == 3, "the sprite rides on the request, not in params"
+        assert "aseprite_sprite" not in str(sent["params"])
+        await ok(mcp, "get_sprite_info")
+        assert "sprite" not in aseprite.last("sprite.info"), "no sprite named: the active one"
 
 
 class TestPoseTemplates:

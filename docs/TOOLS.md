@@ -28,6 +28,11 @@ Conventions:
   `aseprite_instance` (an id, name or id prefix) to name the window for that
   call alone, for clients that keep no MCP session. It is in no schema: the
   server strips it before validation.
+- **Sprites.** A call works on the window's active sprite. Agents sharing one
+  window each pass `aseprite_sprite` on every call: the `spriteId` from
+  `get_sprite_info`, `open_sprite` or `new_sprite`, or the file name. Aseprite
+  makes that sprite active before each command, so edits, undo and the active
+  layer and frame are that sprite's. Stripped like `aseprite_instance`.
 
 ---
 
@@ -70,7 +75,7 @@ The whole document in one call. Call it once before editing rather than assuming
 the structure:
 
 ```json
-{"path": "/sprites/knight.aseprite", "width": 32, "height": 32, "colorMode": "rgb",
+{"spriteId": 3, "path": "/sprites/knight.aseprite", "width": 32, "height": 32, "colorMode": "rgb",
  "paletteSize": 16, "activeFrame": 1, "activeLayer": "3f2a9c1e",
  "layers": [{"id": "3f2a9c1e", "name": "Arm"},
             {"id": "b71d0a44", "name": "Body", "hidden": true}],

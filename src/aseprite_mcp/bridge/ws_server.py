@@ -529,10 +529,12 @@ class AsepriteBridge:
         *,
         timeout: float | None = None,
         instance: str | None = None,
+        sprite: Any = None,
     ) -> dict[str, Any]:
         """Send a command to a window and await its response.
 
-        `instance` is the session's chosen window, if any; see resolve(). Returns
+        `instance` is the session's chosen window, if any; see resolve().
+        `sprite` names the sprite in it to work on; None means the active one. Returns
         the result object. Raises BridgeError for every failure mode, including
         disconnection and timeout, so no caller has to tell transport errors
         apart from Aseprite errors.
@@ -560,7 +562,7 @@ class AsepriteBridge:
         self._pending[request_id] = (future, client)
 
         try:
-            await client.send(encode_request(request_id, command, params))
+            await client.send(encode_request(request_id, command, params, sprite))
         except (ConnectionClosed, OSError) as exc:
             self._pending.pop(request_id, None)
             raise BridgeError(

@@ -132,6 +132,10 @@ Rules:
   server raises `TIMEOUT` and forgets the request.
 - A message without a numeric `id` is a notification, not a reply. `{"type":
   "log", "message": "..."}` is logged by the server; anything else is ignored.
+- A request may carry `"sprite"`: a sprite id (`spriteId` in `sprite.info`), a
+  file name or a full path. The extension makes that sprite active before it
+  runs the command, or fails with `NO_ACTIVE_SPRITE` listing the open sprites if
+  none or several match. Without it, commands work on the active sprite (#34).
 
 ## Error codes
 

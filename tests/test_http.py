@@ -116,6 +116,14 @@ async def test_shared_http_gives_each_session_its_own_window(config, tmp_path, m
 
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     mcp, ctx = build_server(config, shared=True)
+    operations = []
+
+    @mcp.tool()
+    async def two_steps(label: str) -> str:
+        operations.append(label)
+        await asyncio.sleep(0.3)
+        operations.append(label)
+        return label
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     port = listener.getsockname()[1]
@@ -154,6 +162,11 @@ async def test_shared_http_gives_each_session_its_own_window(config, tmp_path, m
                                                      b.call_tool("get_sprite_info", {}))
                 assert json.loads(text(first))["from"] == "aaaaaa"
                 assert json.loads(text(second))["from"] == "bbbbbb"
+
+                # Calls on different windows run side by side (#33).
+                await asyncio.gather(a.call_tool("two_steps", {"label": "a"}),
+                                     b.call_tool("two_steps", {"label": "b"}))
+                assert sorted(operations[:2]) == ["a", "b"]
 
                 # A batch goes, whole, to its own session's window.
                 args = {"x": 0, "y": 0, "rows": ["r"], "legend": {"r": "#ff0000"}}

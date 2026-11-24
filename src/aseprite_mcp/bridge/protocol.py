@@ -5,7 +5,7 @@ section 7. This module is deliberately free of asyncio and websockets imports so
 the encoding rules can be unit-tested in isolation, and so ``protocol.lua`` has a
 single obvious counterpart to mirror.
 
-    request   {"id": 42, "command": "frame.duplicate", "params": {...}}
+    request   {"id": 42, "command": "frame.duplicate", "params": {...}, "sprite": 3}
     success   {"id": 42, "ok": true,  "result": {...}}
     failure   {"id": 42, "ok": false, "error": {"code": "...", "message": "..."}}
 """
@@ -74,9 +74,17 @@ class BridgeError(ToolError):
         return f"{self.code.value}: {self.message}"
 
 
-def encode_request(request_id: int, command: str, params: dict[str, Any] | None = None) -> str:
-    """Serialise an outbound request. Compact separators keep frames small."""
+def encode_request(
+    request_id: int, command: str, params: dict[str, Any] | None = None, sprite: Any = None
+) -> str:
+    """Serialise an outbound request. Compact separators keep frames small.
+
+    sprite, when given, names the sprite the extension makes active before it
+    runs the command (#34).
+    """
     payload: dict[str, Any] = {"id": request_id, "command": command, "params": params or {}}
+    if sprite is not None:
+        payload["sprite"] = sprite
     return json.dumps(payload, separators=(",", ":"))
 
 
