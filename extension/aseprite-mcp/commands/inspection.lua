@@ -113,7 +113,8 @@ return function(deps)
         local visible = parentVisible and layer.isVisible
         if layer.isGroup then
           walk(layer.layers, visible)
-        elseif visible and not layer.isTilemap then
+        -- A reference layer is not in the composite either.
+        elseif visible and not layer.isTilemap and not layer.isReference then
           local cel = layer:cel(frame)
           if cel then layers[#layers + 1] = { layer = layer, cel = cel } end
         end

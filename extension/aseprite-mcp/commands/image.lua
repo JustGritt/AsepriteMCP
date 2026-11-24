@@ -19,19 +19,35 @@ return function(deps)
   -- count as background. Generated images rarely have a perfectly flat one.
   local KEY_TOLERANCE = 48
 
-  --- Make the background transparent in place: pixels near `key` ({r, g, b}).
+  --- Make the background transparent in place: pixels near `key` ({r, g, b})
+  -- reached from the border, 4-connected. The same color enclosed by the art,
+  -- such as a white cross on a tabard, stays (#40).
   local function keyOut(image, key)
+    local w, h = image.width, image.height
     local clear = pc.rgba(0, 0, 0, 0)
-    local removed = 0
-    for it in image:pixels() do
-      local value = it()
+    local stack, removed = {}, 0
+    -- A cleared pixel no longer matches, so each is visited once.
+    local function visit(x, y)
+      local value = image:getPixel(x, y)
       if pc.rgbaA(value) > 0
         and math.abs(pc.rgbaR(value) - key[1]) <= KEY_TOLERANCE
         and math.abs(pc.rgbaG(value) - key[2]) <= KEY_TOLERANCE
         and math.abs(pc.rgbaB(value) - key[3]) <= KEY_TOLERANCE then
-        it(clear)
+        image:drawPixel(x, y, clear)
         removed = removed + 1
+        stack[#stack + 1] = y * w + x
       end
+    end
+    for x = 0, w - 1 do visit(x, 0) visit(x, h - 1) end
+    for y = 1, h - 2 do visit(0, y) visit(w - 1, y) end
+    while #stack > 0 do
+      local i = stack[#stack]
+      stack[#stack] = nil
+      local x, y = i % w, i // w
+      if x > 0 then visit(x - 1, y) end
+      if x < w - 1 then visit(x + 1, y) end
+      if y > 0 then visit(x, y - 1) end
+      if y < h - 1 then visit(x, y + 1) end
     end
     return removed
   end
@@ -129,11 +145,13 @@ return function(deps)
       keyed = { color.toHex(key[1], key[2], key[3], 255), keyOut(source, key) }
     end
 
-    -- Fit inside the canvas keeping the aspect ratio, unless told otherwise; a
-    -- single side given sets the other by the aspect ratio.
+    -- Shrink to fit inside the canvas keeping the aspect ratio, unless told
+    -- otherwise; a single side given sets the other by the aspect ratio. Never
+    -- enlarged by default: a smaller image is often the finished sprite, and
+    -- nearest-neighbour growth by a fraction breaks its pixel grid (#41).
     local w, h = params.width, params.height
     if w == nil and h == nil then
-      local scale = math.min(sprite.width / sw, sprite.height / sh)
+      local scale = math.min(1, sprite.width / sw, sprite.height / sh)
       w, h = math.floor(sw * scale + 0.5), math.floor(sh * scale + 0.5)
     elseif w == nil then
       w = math.floor(sw * h / sh + 0.5)
@@ -191,8 +209,16 @@ return function(deps)
     end
     app.transaction("mcp: import image", function()
       if layer == nil then
-        layer = sprite:newLayer()
-        layer.name = name
+        if params.reference == false then
+          layer = sprite:newLayer()
+          layer.name = name
+        else
+          -- A reference layer, which PNG saves and composites (previews, sprite
+          -- sheets) leave out (#42). Only the command makes one: isReference is
+          -- read-only. It acts on app.sprite, which activeSprite returned.
+          app.command.NewLayer{ reference = true, name = name }
+          layer = app.layer
+        end
         created = true
         -- At the bottom, under everything drawn from it; above a background.
         local bottom = sprite.layers[1]
@@ -207,6 +233,7 @@ return function(deps)
       layer = layer.name,
       id = doc.shortId(sprite, layer),
       created = created or nil,
+      reference = layer.isReference or nil,
       frame = frame,
       source = proto.array({ sw, sh }),
       box = proto.array({ x, y, w, h }),

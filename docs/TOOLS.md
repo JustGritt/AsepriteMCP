@@ -84,8 +84,8 @@ the structure:
 ```
 
 - `layers` runs from the top of the stack down. A layer lists `type`, `hidden`,
-  `locked`, `opacity`, `background`, `depth` and `parent` only when they differ
-  from a plain, visible, opaque, top-level image layer.
+  `reference`, `locked`, `opacity`, `background`, `depth` and `parent` only when
+  they differ from a plain, visible, opaque, top-level image layer.
 - `frameMs[0]` is frame 1.
 - A tag lists `direction` and `repeats` only when they are not `forward` and 0.
 
@@ -140,8 +140,8 @@ Replies with the same overview as `get_sprite_info`, plus
 
 ### `export_spritesheet(path, columns=None, onto=None, x=0, y=0, tag=None, replace=False)`
 Writes the visible layers of every frame, or of one `tag`, as a grid to a `.png`
-inside an allowed directory. A hidden layer stays out, so a reference layer can
-live in the project. The sprite, its layers and its own file do not change.
+inside an allowed directory. A hidden layer and a reference layer (what
+`import_image` makes) stay out, so a reference can live in the project. The sprite, its layers and its own file do not change.
 
 - **Without `onto`** it makes a new sheet, one row unless `columns` is set. `path`
   must not exist yet, unless `replace=true`. Each side is limited to 8192 pixels.
@@ -169,21 +169,36 @@ import_spritesheet("hero.png", 32, 48, y=192, columns=2, rows=3)   # tall frames
 export_spritesheet("hero_new.png", columns=2, onto="hero_new.png", y=192)
 ```
 
-### `import_image(path, width=None, height=None, layer="Reference", frame=None, palette=None, transparent=None)`
+### `import_image(path, width=None, height=None, layer="Reference", frame=None, palette=None, transparent=None, reference=True)`
 Puts an image file (PNG, JPEG, BMP, GIF, TGA or WebP, inside an allowed
 directory) on a layer of the active sprite, as one undo step: a master design or
 a photo to work from. The layer is created at the bottom of the stack if it does
 not exist, and importing again replaces its cel on that frame.
 
-- **Size and place.** By default the image is scaled to fit the canvas keeping
-  its aspect ratio, and centered; `width` or `height` sets the size, and one
-  alone sets the other by the aspect ratio. `shift_cel` moves it afterwards.
+- **Reference layer.** The layer is created as an Aseprite reference layer:
+  PNG saves, `export_spritesheet`, previews, `compare_frames`,
+  `get_animation_bounds` and `get_region(by_layer=true)` leave it out, while
+  `get_region(layer="Reference")` and a preview with `layer` still read it.
+  Unity's Aseprite importer (6.0) ignores the reference flag and imports every
+  visible layer, so hide it once before saving an `.aseprite` file for Unity.
+  `reference=false` makes a normal layer instead, for an image that is the art
+  itself (a finished sprite to split into parts). An existing layer of that name
+  is reused as it is; the reply has `reference: true` when it is one.
+- **Size and place.** By default an image larger than the canvas is shrunk to
+  fit keeping its aspect ratio, and a smaller one is placed 1:1, never enlarged;
+  either way it is centered. `width` or `height` sets the size, growing or
+  shrinking, and one alone sets the other by the aspect ratio. `shift_cel` moves
+  it afterwards.
 - **Scaling.** Shrinking averages every source pixel a target pixel covers
   (`method: "area average"`), since Aseprite's own resize samples a few pixels
   and aliases badly from 1024 to 32. Growing repeats pixels (`"nearest"`).
 - **`transparent`** removes a flat background before scaling: a hex color, or
   `"corner"` for the top-left pixel's color, matched within a small tolerance.
-  Image generators usually output one; left in, it fills the canvas.
+  Image generators usually output one; left in, it fills the canvas. Only the
+  background reachable from the image's edges goes, so the same color inside
+  the art (a white cross on a white-backed knight) stays. Background enclosed by
+  the art, such as between an arm and the body, stays too: clear it with
+  `erase_pixels` or `fill`.
 - **`palette`** snaps every pixel to the nearest of the given hex colors, or of
   the sprite's palette with `"sprite"`, and makes alpha all or nothing. Then
   `get_region(layer="Reference")` reads it as a grid to trace or copy into
@@ -192,8 +207,7 @@ not exist, and importing again replaces its cel on that frame.
 The file is read by Aseprite (through `fsio.lua`, so no new Security prompt once
 the extension is trusted) from a private copy, never from a tab that may hold
 it. The reply gives the `box` it landed in, the `method`, `distinctColors`, and
-`keyedOut` / `snappedTo` when used. Hide the layer with `set_layer_visibility`
-before judging the art on its own.
+`keyedOut` / `snappedTo` when used.
 
 ---
 

@@ -52,6 +52,7 @@ return function(deps)
         name = layer.name,
         type = (layer.isGroup and "group") or (layer.isTilemap and "tilemap") or nil,
         hidden = (not layer.isVisible) or nil,
+        reference = layer.isReference or nil,
         locked = (not layer.isEditable) or nil,
         opacity = (not layer.isGroup and layer.opacity ~= 255) and layer.opacity or nil,
         background = layer.isBackground or nil,
