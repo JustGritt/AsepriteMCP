@@ -42,8 +42,10 @@ MAX_FRAME_BYTES = 8 * 1024 * 1024
 HELLO_TIMEOUT = 10.0
 
 # How long the command that opens the port waits for Aseprite to attach. A
-# running extension redials at least every 5 s (maxreconnectwait in ws.lua).
-CONNECT_WAIT_SECONDS = 10.0
+# running extension redials at least every 5 s (maxreconnectwait in ws.lua), but
+# one still holding a socket to a force-killed server first has to go 20 s
+# without a heartbeat (#18). Ends as soon as Aseprite attaches.
+CONNECT_WAIT_SECONDS = 25.0
 
 # A port opened on demand is let go after this long without a command, so a
 # session used this morning does not hold Aseprite against one this afternoon.
@@ -60,6 +62,15 @@ PORT_HELD_REMEDY = (
     "'Multiple sessions'). To run two copies of Aseprite on purpose, give one a different "
     "ASEPRITE_MCP_PORT and enter that port in its File > MCP Bridge... dialog."
 )
+
+# How often an extension that asked for heartbeats gets one (#18). A socket can
+# die without the extension ever seeing a close -- on Windows a force-killed
+# server left Aseprite "connected" for minutes -- so the extension redials after
+# a few missed heartbeats. The welcome announces this value; the extension
+# derives its silence limit from it.
+HEARTBEAT_SECONDS = 5.0
+HEARTBEAT_CAPABILITY = "heartbeat"
+HEARTBEAT_MESSAGE = json.dumps({"type": "heartbeat"}, separators=(",", ":"))
 
 
 # The id an extension without instance support is filed under.
@@ -386,6 +397,9 @@ class AsepriteBridge:
         name = hello.get("instanceName")
         files = hello.get("files")
         files_error = hello.get("filesError")
+        capabilities = hello.get("capabilities")
+        if not isinstance(capabilities, list):
+            capabilities = []
         instance = Instance(
             id=instance_id,
             name=name if isinstance(name, str) and name else None,
@@ -395,7 +409,7 @@ class AsepriteBridge:
             info={
                 "asepriteVersion": hello.get("asepriteVersion"),
                 "apiVersion": hello.get("apiVersion"),
-                "capabilities": hello.get("capabilities") or [],
+                "capabilities": capabilities,
             },
         )
 
@@ -415,12 +429,15 @@ class AsepriteBridge:
                 pass
 
         self._instances[instance_id] = instance
-        await websocket.send(
-            json.dumps(
-                {"type": "welcome", "ok": True, "protocolVersion": PROTOCOL_VERSION},
-                separators=(",", ":"),
-            )
-        )
+        welcome: dict[str, Any] = {
+            "type": "welcome", "ok": True, "protocolVersion": PROTOCOL_VERSION,
+        }
+        # Only to an extension that asked: an older one would queue each
+        # heartbeat as a request and answer it with a protocol error.
+        interval = HEARTBEAT_SECONDS if HEARTBEAT_CAPABILITY in capabilities else None
+        if interval is not None:
+            welcome["heartbeat"] = interval
+        await websocket.send(json.dumps(welcome, separators=(",", ":")))
         log.info(
             "Aseprite %s connected: version=%s apiVersion=%s capabilities=%s",
             instance.label,
@@ -429,12 +446,22 @@ class AsepriteBridge:
             instance.info.get("capabilities"),
         )
 
+        heartbeat = (
+            asyncio.create_task(
+                self._heartbeat(websocket, interval), name=f"heartbeat {instance.label}"
+            )
+            if interval is not None
+            else None
+        )
         try:
             async for message in websocket:
                 self._on_message(message)
         except ConnectionClosed:
             pass
         finally:
+            if heartbeat is not None:
+                heartbeat.cancel()
+                await asyncio.gather(heartbeat, return_exceptions=True)
             if self._instances.get(instance_id) is instance:
                 del self._instances[instance_id]
                 log.info("Aseprite %s disconnected.", instance.label)
@@ -445,6 +472,20 @@ class AsepriteBridge:
                 ),
                 websocket,
             )
+
+    @staticmethod
+    async def _heartbeat(websocket: ServerConnection, interval: float) -> None:
+        """Tell one extension this server is still here, until its socket closes.
+
+        A notification, not a request: it carries no id, so it never touches the
+        pending table, and the extension drops it before its command queue.
+        """
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                await websocket.send(HEARTBEAT_MESSAGE)
+        except (ConnectionClosed, OSError):
+            pass
 
     def _on_message(self, raw: str | bytes) -> None:
         try:

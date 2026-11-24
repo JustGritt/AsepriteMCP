@@ -161,7 +161,7 @@ end up with Aseprite while the one that wants to draw gets
 the shared HTTP server above is the fix when you run several at once.
 
 A stdio server does not bind the bridge port at startup. It binds on its first
-Aseprite command, which then waits up to 10 seconds for Aseprite to attach, so a
+Aseprite command, which then waits up to 25 seconds for Aseprite to attach, so a
 session that never draws never holds the port. After 10 minutes without a
 command it lets the port go again (Aseprite's dialog shows *Connecting...*), and
 the next command takes it back. If another session holds the port, the error
@@ -169,7 +169,16 @@ says so and names the fix: close that session, or disable the server in it with
 `/mcp`, then call again.
 
 Order does not matter: the extension retries until the server appears, and
-reconnects on its own if the server restarts.
+redials on its own when the server restarts.
+
+A server that is killed outright, rather than stopped, can leave the extension
+holding a socket that never reports closing. This was seen on Windows with
+`taskkill /F`. So the server also sends a heartbeat every 5 seconds, and the
+extension redials after 20 seconds without one. After a forced kill, expect up
+to about half a minute before the replacement server has Aseprite back. If it
+takes longer, press **Reconnect** in the connect dialog below. An extension
+older than the heartbeat has no such fallback. Reinstall it if
+`get_connection_status` reports it outdated.
 
 ## The connect dialog
 

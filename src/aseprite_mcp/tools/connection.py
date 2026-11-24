@@ -76,11 +76,17 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
                     "get_sprite_info."
                 )
             else:
+                # Not "start Aseprite": it may well be running, attached to a
+                # server that died, and the user needs to know what to press (#18).
                 status["hint"] = (
-                    "Start Aseprite with the aseprite-mcp extension installed; it connects "
-                    "within a few seconds. If Aseprite is running, File > MCP Bridge... "
-                    "shows the address it dials and why it fails. If the extension is "
-                    "missing there, check Edit > Preferences > Extensions."
+                    "No Aseprite window is attached to this server. If Aseprite is not "
+                    "running, start it with the aseprite-mcp extension installed; it "
+                    "connects within a few seconds. If it is already running, its "
+                    "extension redials on its own within about 30 seconds of losing a "
+                    "server. If it still has not attached after that, ask the user to "
+                    "open File > MCP Bridge... in Aseprite, which shows the address it "
+                    "dials and why it fails, and press Reconnect; if the extension is "
+                    "missing, check Edit > Preferences > Extensions."
                 )
             return as_json(status)
 

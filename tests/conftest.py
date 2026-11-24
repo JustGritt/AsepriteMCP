@@ -47,6 +47,9 @@ class FakeAseprite:
 
     def __init__(self, instance: str | None = None, name: str | None = None) -> None:
         self.requests: list[dict[str, Any]] = []
+        # Messages without an id, such as heartbeats: the extension never answers
+        # those, and neither does the fake.
+        self.notices: list[dict[str, Any]] = []
         self.responses: dict[str, Any] = {"fs.probe": {"canWriteFiles": True}}
         # What every render writes. Aseprite's PNGs are byte-identical for
         # identical pixels, so changing this stands in for editing the sprite.
@@ -102,6 +105,9 @@ class FakeAseprite:
         assert self._socket is not None
         async for raw in self._socket:
             request = json.loads(raw)
+            if "id" not in request:
+                self.notices.append(request)
+                continue
             self.requests.append(request)
             await self._socket.send(json.dumps(self._respond(request)))
 

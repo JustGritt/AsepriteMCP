@@ -85,6 +85,12 @@ This turned out to be a gift. The client has `minreconnectwait` /
 `maxreconnectwait`, so reconnection is free and the two processes can start in
 either order.
 
+Free only when the client notices the drop, though. A force-killed server once
+left Aseprite on Windows holding a socket that never reported closing, so the
+reconnect never started (#18). The server therefore sends a heartbeat, and
+`ws.poll()` rebuilds a socket that has gone quiet. PROTOCOL.md, "Liveness",
+has the rules.
+
 ### 2. `onreceive` must never touch `app.*`
 
 Socket callbacks run on the UI thread, but they can still land while another

@@ -8,7 +8,7 @@ The server binds `ws://127.0.0.1:32145`; the extension dials out. See
 round that way.
 
 A stdio server binds on its first command rather than at startup, waits up to
-10 seconds (`CONNECT_WAIT_SECONDS`) for the extension to attach, and lets the
+25 seconds (`CONNECT_WAIT_SECONDS`) for the extension to attach, and lets the
 port go after 10 minutes without a command (`IDLE_RELEASE_SECONDS`). A process
 that cannot bind tries again on its next command; nothing retries in the
 background, so the session that wants Aseprite is the one that gets it. The
@@ -26,7 +26,7 @@ within 10 seconds, is closed.
   "protocolVersion": 1,
   "asepriteVersion": "1.3.18.3",
   "apiVersion": 41,
-  "capabilities": ["layer.uuid"],
+  "capabilities": ["layer.uuid", "heartbeat"],
   "instance": "a1b2c3",
   "instanceName": "knight",
   "files": {"main.lua": 2731407353, "commands/rig.lua": 1234567890, "...": 0}
@@ -35,7 +35,9 @@ within 10 seconds, is closed.
 
 `capabilities` lets the server degrade gracefully on older 1.3.x builds rather
 than erroring. It is derived from `app.apiVersion`, never by poking at a
-document — see the note on callback safety in ARCHITECTURE.md.
+document — see the note on callback safety in ARCHITECTURE.md. The one
+exception is `heartbeat`, a protocol feature rather than an Aseprite one: it
+asks the server for the heartbeats described under [Liveness](#liveness).
 
 `files` is the extension's own fingerprint, taken once at load: every `.lua`
 file and `package.json` under its folder (not the `__*` files Aseprite writes),
@@ -55,8 +57,11 @@ shown in the connect dialog, and they are what `select_instance` matches.
 The server answers:
 
 ```json
-{"type": "welcome", "ok": true, "protocolVersion": 1}
+{"type": "welcome", "ok": true, "protocolVersion": 1, "heartbeat": 5.0}
 ```
+
+`heartbeat` is present only when the hello asked for it. It gives the interval
+in seconds.
 
 or, when `require_token` is on and the token does not match:
 
@@ -74,6 +79,33 @@ out yet. A hello without `instance` (an older extension) is filed under the id
 Which window a command goes to is decided on the server, per MCP session; the
 wire format does not change. See ARCHITECTURE.md, "Several windows, several
 sessions".
+
+## Liveness
+
+A socket can die without the extension ever being told. On Windows, with the
+server force-killed, Aseprite kept a socket that delivered no CLOSE for minutes,
+and so never redialled (#18). Heartbeats give the extension something to miss:
+
+- If the hello lists `heartbeat`, the server sends `{"type": "heartbeat"}` at
+  the interval the welcome announced, for as long as the socket is open. It
+  carries no `id`, so it never touches the request table.
+- The extension drops welcomes and heartbeats before its command queue. Every
+  other message still goes to the queue, including any other notice.
+- Anything received counts as hearing from the server, requests included.
+  The client's own ERROR events do not, because they report failing to reach
+  the server. A socket that hears nothing for four intervals, and never less
+  than 10 seconds, is closed and dialled again. Between OPEN and the welcome
+  the limit is 20 seconds.
+- A welcome without `heartbeat` (an older server) sets no limit. Detection
+  then falls back to the client noticing the close, as before.
+- A gap of 3 seconds or more between two pump ticks means the UI thread was
+  frozen, for example by a long render. Nothing could be heard during it, so
+  the silence clock restarts instead of counting it.
+- Events from a socket the extension has already replaced are ignored. A late
+  CLOSE from the old socket would otherwise mark the new one closed.
+
+Nothing here touches `app.*` in the socket callback; decoding a message of at
+most 256 bytes to check its `type` is the only extra work there.
 
 ## Requests and responses
 
