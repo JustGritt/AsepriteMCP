@@ -1565,6 +1565,8 @@ class TestImportImage:
         assert aseprite.last("image.import")["params"]["transparent"] == "#ff00ffff"
         await ok(mcp, "import_image", path="master.jpg", transparent="corner")
         assert aseprite.last("image.import")["params"]["transparent"] == "corner"
+        await ok(mcp, "import_image", path="master.jpg", reference=False)
+        assert aseprite.last("image.import")["params"]["reference"] is False
         await ok(mcp, "import_image", path="master.jpg")
         assert aseprite.last("image.import")["params"] == {
             "path": str((sandbox / "master.jpg").resolve()), "layer": "Reference",

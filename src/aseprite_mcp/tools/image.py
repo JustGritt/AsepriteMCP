@@ -25,9 +25,10 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
     @mcp.tool(
         title="Import image",
         description=(
-            "Put an image file (PNG, JPEG...) on a reference layer of the active sprite, "
-            "centered and scaled to fit, or to width/height, by averaging pixels. transparent "
-            "(a hex color, or 'corner') drops a flat background. palette (hex colors, or "
+            "Put an image (PNG, JPEG...) on a reference layer, which previews and "
+            "exports leave out (reference=false: a normal one), centered and shrunk to "
+            "fit, or to width/height, by averaging pixels. transparent (a hex color, or "
+            "'corner') drops the background at the edges. palette (hex colors, or "
             "'sprite') snaps it so get_region reads it as a grid to trace."
         ),
     )
@@ -39,6 +40,7 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
         frame: int | None = None,
         palette: list[str] | Literal["sprite"] | None = None,
         transparent: str | None = None,
+        reference: bool = True,
     ) -> str:
         limit = ctx.config.max_sprite_size
         for name, value in (("width", width), ("height", height)):
@@ -58,6 +60,8 @@ def register(mcp: MCPServer, ctx: ToolContext) -> None:
             params["height"] = height
         if frame is not None:
             params["frame"] = frame
+        if not reference:
+            params["reference"] = False
         if palette == "sprite":
             params["palette"] = "sprite"
         elif palette is not None:

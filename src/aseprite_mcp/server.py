@@ -57,8 +57,8 @@ conversation and every image stays in it, so get there in few calls:
 - Draw shapes with draw_rows (the format get_region returns), runs with
   draw_line, blocks with draw_rect or fill. Keep draw_pixels for a few scattered
   pixels.
-- To work from a picture, import_image puts it on its own layer; with palette,
-  get_region on that layer is a grid to trace. Hide it to judge the art.
+- To work from a picture, import_image puts it on a reference layer, which
+  previews and exports leave out; with palette, get_region on it is a grid to trace.
 - Animate a character with a rig: one layer per body part (split_layer cuts
   up a flat drawing), define_rig once, then pose_frame builds each frame from
   the rest frame, never from the last one. Draw a new part drawing on the frame
